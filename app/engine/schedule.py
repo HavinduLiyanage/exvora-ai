@@ -1,5 +1,5 @@
 from typing import List, Dict, Any, Tuple
-from app.engine.transfers import verify
+from app.engine.transfers import verify, reset_transfer_call_counter
 
 
 def _min(s: str) -> int:
@@ -50,6 +50,7 @@ def _fits_budget(cost_sum: float, add: float, cap: float|None) -> bool:
 def schedule_day(date: str, ranked: List[Dict[str, Any]], daily_cap: float | None, *,
                  day_start: str="08:30", day_end: str="20:00", locks: List[Any]=[]):
     """Schedule activities for a day with locks-first and gap-filling approach."""
+    reset_transfer_call_counter()
     cost_sum = 0.0
     items: List[Dict[str,Any]] = []
 

@@ -5,6 +5,9 @@ from app.engine.candidates import basic_candidates
 from app.engine.rules import apply_hard_rules
 from app.engine.rank import rank
 from app.engine.schedule import schedule_day
+from app.config import get_settings
+
+settings = get_settings()
 
 router = APIRouter()
 
@@ -46,10 +49,18 @@ def build_itinerary(req: ItineraryRequest):
     )
     cands = apply_hard_rules(cands, req.constraints.model_dump() if req.constraints else {}, req.locks)
     ranked = rank(cands, (req.constraints.daily_budget_cap if req.constraints else None))
-    plan = schedule_day(
-        date0, ranked, (req.constraints.daily_budget_cap if req.constraints else None),
-        day_start=day_start, day_end=day_end, locks=req.locks
-    )
+    try:
+        plan = schedule_day(
+            date0, ranked, (req.constraints.daily_budget_cap if req.constraints else None),
+            day_start=day_start, day_end=day_end, locks=req.locks
+        )
+    except Exception as e:
+        # Only escalate as 424 when Google route verification is explicitly enabled
+        if settings.USE_GOOGLE_ROUTES:
+            raise HTTPException(status_code=424, detail=f"Transfer verification failed: {e}")
+        # otherwise, re-raise (or you could fall back to heuristic globally)
+        raise
+    
     resp = {"currency":"LKR","days":[DayPlan(**plan)],"totals":{"trip_cost_est":plan["summary"]["est_cost"],"trip_transfer_minutes":sum(i.get("duration_minutes",0) for i in plan["items"] if i.get("type")=="transfer")}}
     return resp
 
@@ -81,6 +92,14 @@ def feedback_repack(req: FeedbackRequest):
     cands = basic_candidates(pois(), prefs, date_str=req.date, day_window=(day_start, day_end))
     cands = [c for c in cands if c.get("place_id") not in remove_ids]
     ranked = rank(cands, (req.constraints.daily_budget_cap if req.constraints else None))
-    plan = schedule_day(req.date, ranked, (req.constraints.daily_budget_cap if req.constraints else None),
-                        day_start=day_start, day_end=day_end, locks=req.locks)
+    try:
+        plan = schedule_day(req.date, ranked, (req.constraints.daily_budget_cap if req.constraints else None),
+                            day_start=day_start, day_end=day_end, locks=req.locks)
+    except Exception as e:
+        # Only escalate as 424 when Google route verification is explicitly enabled
+        if settings.USE_GOOGLE_ROUTES:
+            raise HTTPException(status_code=424, detail=f"Transfer verification failed: {e}")
+        # otherwise, re-raise (or you could fall back to heuristic globally)
+        raise
+    
     return DayPlan(**plan)

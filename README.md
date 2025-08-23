@@ -243,7 +243,38 @@ The API will be available at http://localhost:8080
 
 Environment variables can be used to configure the application:
 
+### Google Routes Integration
+
+Set `USE_GOOGLE_ROUTES=true` and `GOOGLE_MAPS_API_KEY` to enable live ETAs via Google Distance Matrix.
+
+**Environment Variables:**
 - `USE_GOOGLE_ROUTES`: Enable Google Routes API (default: false)
+- `GOOGLE_MAPS_API_KEY`: Your Google Maps API key (required when USE_GOOGLE_ROUTES=true)
+- `TRANSFER_CACHE_TTL_SECONDS`: Cache TTL for transfer data (default: 600 seconds)
+- `TRANSFER_MAX_CALLS_PER_REQUEST`: Max Google API calls per request (default: 30)
+
+**Response Fields:**
+Transfer responses remain the same but now include realistic data:
+```json
+{
+  "type": "transfer",
+  "duration_minutes": 25,
+  "distance_km": 8.5,
+  "source": "google_routes_live"
+}
+```
+
+**Error Handling:**
+- With Google enabled: Returns HTTP 424 on transfer verification failures
+- With Google disabled: Always falls back to heuristic estimates
+- Automatic fallback when API key is missing or invalid
+
+**Caching & Limits:**
+- Per-process cache keyed by (from, to, mode, 15-min bucket)
+- Max Google calls per request controlled by `TRANSFER_MAX_CALLS_PER_REQUEST`
+- Cache reduces repeat calls during itinerary generation
+
+### General Settings
 - `MAX_ITEMS_PER_DAY`: Maximum activities per day (default: 4)
 
 ## Contributing
