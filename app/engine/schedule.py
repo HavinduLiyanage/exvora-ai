@@ -1,84 +1,108 @@
-from typing import List, Dict, Any
-from datetime import datetime, time
+from typing import List, Dict, Any, Tuple
 from app.engine.transfers import verify
 
 
-def schedule_day(date: str, ranked: List[Dict[str, Any]], daily_cap: float | None, locks: List[Any] = None) -> Dict[str, Any]:
-    """Schedule activities for a day based on ranked POIs."""
-    if locks is None:
-        locks = []
-    
+def _min(s: str) -> int:
+    h, m = map(int, s.split(":"))
+    return h*60 + m
+
+
+def _fmt(m: int) -> str:
+    return f"{m//60:02d}:{m%60:02d}"
+
+
+def _locks_to_items(locks: List[Any]) -> List[Dict[str,Any]]:
+    # turn locks into Activity blocks; if no start/end, treat as 60m placeholder
     items = []
+    for lk in locks:
+        st = lk.start or "09:00"
+        en = lk.end or _fmt(_min(st) + 60)
+        items.append({
+            "start": st, 
+            "end": en, 
+            "place_id": lk.place_id, 
+            "title": lk.title or "Locked Activity", 
+            "estimated_cost": 0
+        })
+    # sort by start time
+    return sorted(items, key=lambda a: _min(a["start"]))
+
+
+def _build_gaps(day_start: str, day_end: str, lock_items: List[Dict[str,Any]]) -> List[Tuple[int,int]]:
+    cur = _min(day_start)
+    gaps = []
+    for it in lock_items:
+        s, e = _min(it["start"]), _min(it["end"])
+        if s > cur:
+            gaps.append((cur, s))
+        cur = max(cur, e)
+    if cur < _min(day_end):
+        gaps.append((cur, _min(day_end)))
+    return gaps
+
+
+def _fits_budget(cost_sum: float, add: float, cap: float|None) -> bool:
+    if cap is None: 
+        return True
+    return cost_sum + (add or 0) <= cap
+
+
+def schedule_day(date: str, ranked: List[Dict[str, Any]], daily_cap: float | None, *,
+                 day_start: str="08:30", day_end: str="20:00", locks: List[Any]=[]):
+    """Schedule activities for a day with locks-first and gap-filling approach."""
     cost_sum = 0.0
-    
-    # Start at 9:00 AM (540 minutes from midnight)
-    current_time_minutes = 9 * 60
-    
-    def format_time(minutes: int) -> str:
-        """Convert minutes from midnight to HH:MM format."""
-        hours = minutes // 60
-        mins = minutes % 60
-        return f"{hours:02d}:{mins:02d}"
-    
-    # TODO: Insert locks first in future iteration
-    # For MVP, just place top N ranked POIs under budget
-    
-    for poi in ranked[:4]:  # Limit to top 4 activities
-        cost = float(poi.get("estimated_cost") or 0)
-        duration = int(poi.get("duration_minutes") or 60)
-        
-        # Check budget constraint
-        if daily_cap and cost_sum + cost > daily_cap:
-            continue
-        
-        # Add transfer from previous location if needed
-        if items:
-            last_item = items[-1]
-            # Only add transfer if last item was an activity, not a transfer
-            if last_item.get("type") != "transfer":
-                transfer_info = verify(
-                    last_item["place_id"], 
-                    poi["place_id"], 
-                    "DRIVE", 
-                    format_time(current_time_minutes)
-                )
-                
-                transfer = {
-                    "type": "transfer",
-                    "from_place_id": last_item["place_id"],
+    items: List[Dict[str,Any]] = []
+
+    # 1) place locks first
+    lock_items = _locks_to_items(locks)
+    items.extend(lock_items)
+
+    # 2) build time gaps
+    gaps = _build_gaps(day_start, day_end, lock_items)
+
+    # 3) fill each gap with top ranked that fit time & budget
+    for gstart, gend in gaps:
+        t = gstart
+        last_place_id = None if not items else items[-1].get("place_id")
+        for poi in list(ranked):  # iterate a snapshot; we'll remove placed ones
+            dur = int(poi.get("duration_minutes") or 60)
+            cost = float(poi.get("estimated_cost") or 0)
+            if t + dur > gend:
+                continue
+            if not _fits_budget(cost_sum, cost, daily_cap):
+                continue
+
+            # add transfer if previous thing is an activity
+            if items and items[-1].get("type") != "transfer" and last_place_id and poi["place_id"] != last_place_id:
+                tr = verify(last_place_id, poi["place_id"], "DRIVE", _fmt(t))
+                items.append({
+                    "type":"transfer",
+                    "from_place_id": last_place_id,
                     "to_place_id": poi["place_id"],
-                    "mode": "DRIVE",
-                    **transfer_info
-                }
-                items.append(transfer)
-                current_time_minutes += transfer_info["duration_minutes"]
-        
-        # Add the activity
-        activity = {
-            "start": format_time(current_time_minutes),
-            "end": format_time(current_time_minutes + duration),
-            "place_id": poi["place_id"],
-            "title": poi["name"],
-            "estimated_cost": cost
-        }
-        items.append(activity)
-        
-        current_time_minutes += duration
-        cost_sum += cost
-    
-    # Remove any dangling transfer at the end
+                    "mode":"DRIVE", 
+                    **tr
+                })
+                t += tr["duration_minutes"]
+
+            # add activity
+            items.append({
+                "start": _fmt(t), 
+                "end": _fmt(t+dur), 
+                "place_id": poi["place_id"], 
+                "title": poi.get("name"), 
+                "estimated_cost": cost
+            })
+            t += dur
+            cost_sum += cost
+            last_place_id = poi["place_id"]
+            ranked.remove(poi)
+
+    # clean dangling transfer
     if items and items[-1].get("type") == "transfer":
         items.pop()
-    
-    # Create summary
-    summary = {
-        "title": "Day Plan",
-        "est_cost": cost_sum,
-        "health_load": "moderate"
-    }
-    
+
     return {
         "date": date,
-        "summary": summary,
+        "summary": {"title":"Day Plan","est_cost": cost_sum,"health_load":"moderate"},
         "items": items
     }

@@ -165,3 +165,87 @@ def test_build_itinerary_invalid_request():
     
     response = client.post("/v1/itinerary", json=invalid_request)
     assert response.status_code == 422
+
+
+def test_itinerary_respects_locks_and_budget():
+    """Test itinerary generation respects locks and budget constraints."""
+    body = {
+        "trip_context": {
+            "base_place_id": "ChIJbase",
+            "date_range": {"start": "2025-09-10", "end": "2025-09-14"},
+            "day_template": {"start": "09:00", "end": "18:00", "pace": "moderate"},
+            "modes": ["DRIVE", "WALK"]
+        },
+        "preferences": {"themes": ["Culture"], "avoid_tags": []},
+        "constraints": {"daily_budget_cap": 100},
+        "locks": [{"place_id": "ChIJlock1", "start": "12:00", "end": "13:00", "title": "Lunch"}]
+    }
+    res = client.post("/v1/itinerary", json=body)
+    assert res.status_code == 200
+    data = res.json()
+    items = data["days"][0]["items"]
+    assert any(i.get("title") == "Lunch" for i in items)
+
+
+def test_feedback_remove_and_rate_bias():
+    """Test feedback with remove_item and rate_item actions."""
+    # First, build an initial itinerary
+    seed_itinerary_body = {
+        "trip_context": {
+            "base_place_id": "ChIJbase",
+            "date_range": {"start": "2025-09-10", "end": "2025-09-11"},
+            "day_template": {"start": "09:00", "end": "18:00", "pace": "moderate"},
+            "modes": ["DRIVE", "WALK"]
+        },
+        "preferences": {"themes": ["Culture"]},
+        "constraints": {"daily_budget_cap": 120},
+        "locks": []
+    }
+    
+    res = client.post("/v1/itinerary", json=seed_itinerary_body)
+    day = res.json()["days"][0]["date"]
+    
+    # Pick an activity place_id from response
+    act = next(i for i in res.json()["days"][0]["items"] if i.get("type") != "transfer")
+    
+    fb = {
+        "date": day,
+        "base_place_id": "ChIJbase",
+        "day_template": {"start": "09:00", "end": "18:00", "pace": "moderate"},
+        "modes": ["DRIVE", "WALK"],
+        "preferences": {"themes": ["Culture"], "avoid_tags": []},
+        "constraints": {"daily_budget_cap": 100},
+        "locks": [],
+        "current_day_plan": {"date": day, "summary": {"title": "tmp"}, "items": []},
+        "actions": [
+            {"type": "remove_item", "place_id": act["place_id"]},
+            {"type": "rate_item", "place_id": act["place_id"], "rating": 1, "tags": ["too_crowded"]}
+        ]
+    }
+    
+    res2 = client.post("/v1/itinerary/feedback", json=fb)
+    assert res2.status_code == 200
+    
+    ids = [i.get("place_id") for i in res2.json()["items"] if i.get("type") != "transfer"]
+    assert act["place_id"] not in ids
+
+
+def test_locks_conflict_returns_409():
+    """Test that overlapping locks return 409 conflict."""
+    body = {
+        "trip_context": {
+            "base_place_id": "ChIJbase",
+            "date_range": {"start": "2025-09-10", "end": "2025-09-14"},
+            "day_template": {"start": "09:00", "end": "18:00", "pace": "moderate"},
+            "modes": ["DRIVE", "WALK"]
+        },
+        "preferences": {"themes": ["Culture"]},
+        "constraints": {"daily_budget_cap": 100},
+        "locks": [
+            {"place_id": "ChIJlock1", "start": "12:00", "end": "13:00", "title": "Lunch"},
+            {"place_id": "ChIJlock2", "start": "12:30", "end": "13:30", "title": "Meeting"}
+        ]
+    }
+    res = client.post("/v1/itinerary", json=body)
+    assert res.status_code == 409
+    assert "Lock time windows overlap" in res.json()["detail"]
