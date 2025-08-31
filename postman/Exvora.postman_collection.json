@@ -1,0 +1,70 @@
+{
+  "info": {
+    "name": "Exvora AI API",
+    "description": "API collection for Exvora AI itinerary generation",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/v1/healthz",
+          "host": ["{{base_url}}"],
+          "path": ["v1", "healthz"]
+        }
+      }
+    },
+    {
+      "name": "Build Itinerary",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"trip_context\": {\n    \"date_range\": {\n      \"start\": \"2025-09-10\",\n      \"end\": \"2025-09-12\"\n    },\n    \"day_template\": {\n      \"start\": \"09:00\",\n      \"end\": \"18:00\",\n      \"pace\": \"moderate\"\n    },\n    \"base_place_id\": \"colombo_fort\"\n  },\n  \"preferences\": {\n    \"themes\": [\"culture\", \"history\"],\n    \"avoid_tags\": [\"crowded\"]\n  },\n  \"constraints\": {\n    \"daily_budget_cap\": 100,\n    \"max_transfer_minutes\": 30\n  },\n  \"locks\": []\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/v1/itinerary",
+          "host": ["{{base_url}}"],
+          "path": ["v1", "itinerary"]
+        }
+      }
+    },
+    {
+      "name": "Feedback Repack",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"date\": \"2025-09-10\",\n  \"day_template\": {\n    \"start\": \"09:00\",\n    \"end\": \"18:00\",\n    \"pace\": \"moderate\"\n  },\n  \"trip_context\": {\n    \"base_place_id\": \"colombo_fort\"\n  },\n  \"preferences\": {\n    \"themes\": [\"culture\", \"history\"],\n    \"avoid_tags\": [\"crowded\"]\n  },\n  \"constraints\": {\n    \"daily_budget_cap\": 100,\n    \"max_transfer_minutes\": 30\n  },\n  \"locks\": [\n    {\n      \"start\": \"14:00\",\n      \"end\": \"15:00\",\n      \"title\": \"Lunch Reservation\"\n    }\n  ],\n  \"actions\": [\n    {\n      \"type\": \"remove_item\",\n      \"place_id\": \"temple_of_tooth\"\n    }\n  ]\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/v1/itinerary/feedback",
+          "host": ["{{base_url}}"],
+          "path": ["v1", "itinerary", "feedback"]
+        }
+      }
+    }
+  ]
+}

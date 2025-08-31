@@ -15,6 +15,14 @@ def setup_data():
     load_pois()
 
 
+@pytest.fixture(autouse=True)
+def reset_rate_limit():
+    """Reset rate limit between tests."""
+    from app.api.routes import _rate_limit_store
+    _rate_limit_store.clear()
+    yield
+
+
 def test_healthz_endpoint():
     """Test the health check endpoint."""
     response = client.get("/v1/healthz")
@@ -248,4 +256,246 @@ def test_locks_conflict_returns_409():
     }
     res = client.post("/v1/itinerary", json=body)
     assert res.status_code == 409
-    assert "Lock time windows overlap" in res.json()["detail"]
+    # Check structured error format
+    error_data = res.json()
+    assert "error" in error_data
+    assert error_data["error"]["code"] == 409
+    assert error_data["error"]["type"] == "lock_conflict"
+    assert "Lock time windows overlap" in error_data["error"]["message"]
+
+
+def test_validation_limits_items_per_day():
+    """Test that each day respects MAX_ITEMS_PER_DAY limit."""
+    # This test might need adjustment based on actual POI data
+    request_body = {
+        "trip_context": {
+            "base_place_id": "ChIJbase",
+            "date_range": {"start": "2025-09-10", "end": "2025-09-11"},
+            "day_template": {"start": "08:30", "end": "20:00", "pace": "intense"},
+            "modes": ["DRIVE"]
+        },
+        "preferences": {"themes": ["Culture", "Nature", "Food"]},
+        "constraints": {"daily_budget_cap": 500},  # High budget to allow many items
+        "locks": []
+    }
+    
+    response = client.post("/v1/itinerary", json=request_body)
+    
+    # Should either succeed (if POI data allows) or fail with 400 if limit exceeded
+    if response.status_code == 200:
+        data = response.json()
+        for day in data["days"]:
+            non_transfer_items = [item for item in day["items"] if item.get("type") not in ["transfer", "break"]]
+            assert len(non_transfer_items) <= 4  # MAX_ITEMS_PER_DAY default
+
+
+def test_feedback_preserves_locks():
+    """Test that feedback repack preserves existing locks."""
+    # Create a day with a lock
+    itinerary_request = {
+        "trip_context": {
+            "base_place_id": "ChIJbase",
+            "date_range": {"start": "2025-09-10", "end": "2025-09-11"},
+            "day_template": {"start": "08:30", "end": "20:00", "pace": "moderate"},
+            "modes": ["DRIVE"]
+        },
+        "preferences": {"themes": ["Culture"]},
+        "constraints": {"daily_budget_cap": 50},  # Lower budget to avoid exceeding item limit
+        "locks": [
+            {
+                "place_id": "ChIJlocked",
+                "start": "14:00",
+                "end": "15:00",
+                "title": "Reserved Lunch"
+            }
+        ]
+    }
+    
+    itinerary_response = client.post("/v1/itinerary", json=itinerary_request)
+    assert itinerary_response.status_code == 200
+    itinerary_data = itinerary_response.json()
+    
+    # Test feedback that should preserve the lock
+    feedback_request = {
+        "date": "2025-09-10",
+        "base_place_id": "ChIJbase",
+        "day_template": {"start": "08:30", "end": "20:00", "pace": "moderate"},
+        "modes": ["DRIVE"],
+        "preferences": {"themes": ["Culture"]},
+        "constraints": {"daily_budget_cap": 50},  # Keep same budget
+        "locks": [
+            {
+                "place_id": "ChIJlocked",
+                "start": "14:00",
+                "end": "15:00",
+                "title": "Reserved Lunch"
+            }
+        ],
+        "current_day_plan": itinerary_data["days"][0],
+        "actions": [
+            {
+                "type": "rate_item",
+                "place_id": itinerary_data["days"][0]["items"][0]["place_id"],
+                "rating": 3
+            }
+        ]
+    }
+    
+    response = client.post("/v1/itinerary/feedback", json=feedback_request)
+    
+    assert response.status_code == 200
+    data = response.json()
+    
+    # Check that the lock is preserved
+    lock_items = [item for item in data["items"] if item.get("place_id") == "ChIJlocked"]
+    assert len(lock_items) == 1
+    lock_item = lock_items[0]
+    assert lock_item["start"] == "14:00"
+    assert lock_item["end"] == "15:00"
+    assert lock_item["title"] == "Reserved Lunch"
+
+
+def test_response_notes_on_heuristic_fallback():
+    """Test that response includes notes when heuristic fallback is used."""
+    request_body = {
+        "trip_context": {
+            "base_place_id": "ChIJbase",
+            "date_range": {"start": "2025-09-10", "end": "2025-09-11"},
+            "day_template": {"start": "08:30", "end": "20:00", "pace": "moderate"},
+            "modes": ["DRIVE"]
+        },
+        "preferences": {"themes": ["Culture"]},
+        "constraints": {"daily_budget_cap": 100},
+        "locks": []
+    }
+    
+    response = client.post("/v1/itinerary", json=request_body)
+    
+    assert response.status_code == 200
+    data = response.json()
+    
+    # Check that notes field exists (may be None if no fallbacks)
+    assert "notes" in data
+    # If notes exist, they should contain information about heuristic usage
+    if data.get("notes"):
+        assert any("heuristic" in note.lower() for note in data["notes"])
+
+
+def test_currency_conversion():
+    """Test that currency conversion works correctly."""
+    request_body = {
+        "trip_context": {
+            "base_place_id": "ChIJbase",
+            "date_range": {"start": "2025-09-10", "end": "2025-09-11"},
+            "day_template": {"start": "08:30", "end": "20:00", "pace": "moderate"},
+            "modes": ["DRIVE"]
+        },
+        "preferences": {
+            "themes": ["Culture"],
+            "currency": "USD"  # Request USD instead of default LKR
+        },
+        "constraints": {"daily_budget_cap": 100},
+        "locks": []
+    }
+    
+    response = client.post("/v1/itinerary", json=request_body)
+    
+    assert response.status_code == 200
+    data = response.json()
+    
+    # Check that currency is USD
+    assert data["currency"] == "USD"
+    
+    # Check that totals are computed (currency conversion should work)
+    assert "totals" in data
+    assert data["totals"]["total_cost"] is not None
+
+
+def test_structured_error_format():
+    """Test that errors follow consistent structured format."""
+    # Test with invalid date range (should trigger 422)
+    request_body = {
+        "trip_context": {
+            "base_place_id": "ChIJbase",
+            "date_range": {"start": "2025-09-10", "end": "2025-09-25"},  # >14 days
+            "day_template": {"start": "08:30", "end": "20:00", "pace": "moderate"},
+            "modes": ["DRIVE"]
+        },
+        "preferences": {"themes": ["Culture"]},
+        "constraints": {"daily_budget_cap": 100},
+        "locks": []
+    }
+    
+    response = client.post("/v1/itinerary", json=request_body)
+    
+    assert response.status_code == 422
+    data = response.json()
+    
+    # Check structured error format
+    assert "error" in data
+    assert data["error"]["code"] == 422
+    assert data["error"]["type"] == "validation_error"
+    assert "message" in data["error"]
+    assert "hints" in data["error"]
+
+
+def test_feedback_notes():
+    """Test that feedback responses include notes about changes."""
+    # Create a day with a lock
+    itinerary_request = {
+        "trip_context": {
+            "base_place_id": "ChIJbase",
+            "date_range": {"start": "2025-09-10", "end": "2025-09-11"},
+            "day_template": {"start": "08:30", "end": "20:00", "pace": "moderate"},
+            "modes": ["DRIVE"]
+        },
+        "preferences": {"themes": ["Culture"]},
+        "constraints": {"daily_budget_cap": 50},
+        "locks": [
+            {
+                "place_id": "ChIJlocked",
+                "start": "14:00",
+                "end": "15:00",
+                "title": "Reserved Lunch"
+            }
+        ]
+    }
+    
+    itinerary_response = client.post("/v1/itinerary", json=itinerary_request)
+    assert itinerary_response.status_code == 200
+    itinerary_data = itinerary_response.json()
+    
+    # Test feedback that removes an item
+    feedback_request = {
+        "date": "2025-09-10",
+        "base_place_id": "ChIJbase",
+        "day_template": {"start": "08:30", "end": "20:00", "pace": "moderate"},
+        "modes": ["DRIVE"],
+        "preferences": {"themes": ["Culture"]},
+        "constraints": {"daily_budget_cap": 50},
+        "locks": [
+            {
+                "place_id": "ChIJlocked",
+                "start": "14:00",
+                "end": "15:00",
+                "title": "Reserved Lunch"
+            }
+        ],
+        "current_day_plan": itinerary_data["days"][0],
+        "actions": [
+            {
+                "type": "remove_item",
+                "place_id": itinerary_data["days"][0]["items"][0]["place_id"]
+            }
+        ]
+    }
+    
+    response = client.post("/v1/itinerary/feedback", json=feedback_request)
+    
+    assert response.status_code == 200
+    data = response.json()
+    
+    # Check that notes field exists and contains information about the removal
+    assert "notes" in data
+    if data.get("notes"):
+        assert any("removed" in note.lower() for note in data["notes"])

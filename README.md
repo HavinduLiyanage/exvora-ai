@@ -285,17 +285,3 @@ Transfer responses remain the same but now include realistic data:
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Future Enhancements
-
-- [ ] Google Routes API integration for real transfer times
-- [ ] Opening hours and seasonality filtering
-- [ ] Lock implementation with time windows
-- [ ] Multi-day itinerary generation
-- [ ] Enhanced budget envelope logic
-- [ ] Machine learning-based ranking
-- [ ] Real-time POI data integration
-

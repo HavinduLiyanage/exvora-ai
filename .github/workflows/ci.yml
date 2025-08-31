@@ -48,6 +48,15 @@ jobs:
     - name: Run tests
       run: pytest tests/ -v --tb=short
       
+    - name: Export OpenAPI schema
+      run: python scripts/dump_openapi.py > openapi.json
+      
+    - name: Upload OpenAPI schema
+      uses: actions/upload-artifact@v4
+      with:
+        name: openapi-schema
+        path: openapi.json
+        
   build:
     name: Build Docker Image
     runs-on: ubuntu-latest

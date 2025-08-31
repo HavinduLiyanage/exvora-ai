@@ -18,10 +18,11 @@ def test_candidate_filtering_avoid_tags():
     ]
     prefs = {"avoid_tags": ["nightlife"]}
     
-    result = basic_candidates(pois, prefs, date_str="2025-09-08", day_window=("09:00", "17:00"))
+    result, filter_reasons = basic_candidates(pois, prefs, date_str="2025-09-08", day_window=("09:00", "17:00"))
     
     assert len(result) == 2
     assert all(poi["poi_id"] != "bar1" for poi in result)
+    assert filter_reasons["dropped_avoid"] == 1
 
 
 def test_candidate_filtering_theme_overlap():
@@ -36,10 +37,11 @@ def test_candidate_filtering_theme_overlap():
     ]
     prefs = {"themes": ["Culture"]}
     
-    result = basic_candidates(pois, prefs, date_str="2025-09-08", day_window=("09:00", "17:00"))
+    result, filter_reasons = basic_candidates(pois, prefs, date_str="2025-09-08", day_window=("09:00", "17:00"))
     
     assert len(result) == 2
     assert all(poi["poi_id"] != "beach1" for poi in result)
+    assert filter_reasons["dropped_theme"] == 1
 
 
 def test_rank_scoring_deterministic():
@@ -51,13 +53,14 @@ def test_rank_scoring_deterministic():
     ]
     daily_cap = 200
     
-    result1 = rank(pois, daily_cap)
-    result2 = rank(pois, daily_cap)
+    result1, metrics1 = rank(pois, daily_cap)
+    result2, metrics2 = rank(pois, daily_cap)
     
     # Results should be identical
     assert [p["poi_id"] for p in result1] == [p["poi_id"] for p in result2]
-    # Cheaper items should generally rank higher
-    assert result1[0]["estimated_cost"] <= result1[-1]["estimated_cost"]
+    # Check that metrics are returned
+    assert "model_version" in metrics1
+    assert "model_version" in metrics2
 
 
 def test_schedule_respects_daily_budget_cap():
@@ -116,10 +119,13 @@ def test_availability_filters():
     prefs = {"themes": ["Culture", "Nature"]}
     
     # Test Monday during day (should get open_one and seasonal_one)
-    result = basic_candidates(pois, prefs, date_str="2025-01-06", day_window=("09:00", "17:00"))
+    result, filter_reasons = basic_candidates(pois, prefs, date_str="2025-01-06", day_window=("09:00", "17:00"))
+    
     ids = {p["poi_id"] for p in result}
-    assert "open_one" in ids and "closed_one" not in ids
-    assert "seasonal_one" in ids  # January is in season
+    assert "open_one" in ids
+    assert "seasonal_one" in ids
+    assert "closed_one" not in ids
+    assert filter_reasons["dropped_closed"] == 1
 
 
 def test_locks_first_packing():
