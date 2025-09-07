@@ -17,7 +17,8 @@ def apply_hard_rules(cands: List[Dict[str, Any]], constraints: Dict[str, Any], l
     filter_reasons = {
         "dropped_budget": 0,
         "dropped_transfer": 0,
-        "dropped_locks": 0
+        "dropped_locks": 0,
+        "dropped_safety": 0
     }
     
     out = []
@@ -40,6 +41,11 @@ def apply_hard_rules(cands: List[Dict[str, Any]], constraints: Dict[str, Any], l
             if candidate_duration > 120:
                 filter_reasons["dropped_locks"] += 1
                 continue
+        
+        # Safety gate: filter out POIs with safety flags that conflict with preferences
+        if _should_filter_safety(candidate, constraints):
+            filter_reasons["dropped_safety"] += 1
+            continue
             
         out.append(candidate)
     
@@ -48,3 +54,16 @@ def apply_hard_rules(cands: List[Dict[str, Any]], constraints: Dict[str, Any], l
     logger.debug(f"Filter reasons: {filter_reasons}")
     
     return out, filter_reasons
+
+
+def _should_filter_safety(candidate: Dict[str, Any], constraints: Dict[str, Any]) -> bool:
+    """Check if candidate should be filtered due to safety concerns."""
+    safety_flags = candidate.get("safety_flags", [])
+    avoid_tags = constraints.get("avoid_tags", [])
+    
+    # Hard filter: if avoid_tags includes "crowded" and POI has "crowded" safety flag
+    if "crowded" in [tag.lower() for tag in avoid_tags]:
+        if any("crowded" in flag.lower() for flag in safety_flags):
+            return True
+    
+    return False

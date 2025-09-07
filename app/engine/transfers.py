@@ -187,3 +187,57 @@ def verify_sequence(sequence: List[Dict[str, Any]], mode: str = "DRIVE") -> List
         verified_sequence.append(item)
     
     return verified_sequence
+
+
+def reinsert_changed_transfers(
+    before: List[Dict[str, Any]],
+    after_activities: List[Dict[str, Any]],
+    mode: str = "DRIVE",
+) -> List[Dict[str, Any]]:
+    """
+    Merge transfers by reusing prior legs if unchanged, else estimate fresh.
+    Assumes `after_activities` are chronological Activity items (no transfers).
+    """
+    # Build a map of prior transfer legs: (from,to) -> transfer dict
+    prev_transfers: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    prev_pairs: List[Tuple[str, str]] = []
+    prev_acts = [i for i in before if i.get("type") != "transfer"]
+    for i in range(1, len(before)):
+        a = before[i - 1]
+        b = before[i]
+        if a.get("type") != "transfer" and b.get("type") == "transfer":
+            # next after transfer is activity, capture on following step
+            continue
+    # Simpler: derive from consecutive activities in `before`
+    for i in range(1, len(prev_acts)):
+        frm = prev_acts[i - 1].get("place_id")
+        to = prev_acts[i].get("place_id")
+        # find transfer item between these two in before
+        # scan window around their positions
+        for j in range(len(before)):
+            it = before[j]
+            if it.get("type") == "transfer" and it.get("from_place_id") == frm and it.get("to_place_id") == to:
+                prev_transfers[(frm, to)] = it
+                prev_pairs.append((frm, to))
+                break
+
+    out: List[Dict[str, Any]] = []
+    for idx, act in enumerate(after_activities):
+        out.append(act)
+        if idx == len(after_activities) - 1:
+            break
+        frm = act.get("place_id")
+        to = after_activities[idx + 1].get("place_id")
+        reused = prev_transfers.get((frm, to))
+        if reused:
+            out.append({**reused})
+        else:
+            tr = verify(frm, to, mode, act.get("end", "09:00"))
+            out.append({
+                "type": "transfer",
+                "from_place_id": frm,
+                "to_place_id": to,
+                "mode": mode,
+                **tr,
+            })
+    return out

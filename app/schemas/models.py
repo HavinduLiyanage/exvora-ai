@@ -1,6 +1,12 @@
-from typing import List, Optional, Union, Literal
+from typing import List, Optional, Union, Literal, Annotated
 from pydantic import BaseModel, Field, field_validator, ConfigDict
-from datetime import datetime
+from datetime import datetime, date, time
+
+
+# Basic Models
+class Coords(BaseModel):
+    lat: float
+    lng: float
 
 
 # Trip Context Models
@@ -220,6 +226,10 @@ class FeedbackAction(BaseModel):
     max_transfer_minutes: Optional[int] = None
 
 
+class CurrentDayPlan(BaseModel):
+    items: List[Union[Activity, Transfer]]
+
+
 class FeedbackRequest(BaseModel):
     date: str
     base_place_id: str
@@ -228,5 +238,68 @@ class FeedbackRequest(BaseModel):
     preferences: Optional[Preferences] = None
     constraints: Optional[Constraints] = None
     locks: List[Lock] = []
-    current_day_plan: DayPlan
+    current_day_plan: CurrentDayPlan
     actions: List[FeedbackAction]
+
+
+class FeedbackResponse(BaseModel):
+    date: date
+    summary: Summary
+    items: List[Union[Activity, Transfer]]
+    notes: List[str] = []
+
+
+# NLP Planner models
+class NLPPlanRequest(BaseModel):
+    prompt: str
+
+
+class NLPPlanResponse(BaseModel):
+    trip_context: TripContext
+    preferences: Preferences
+    constraints: Constraints
+    locks: List[Lock] = []
+
+
+# Share token models
+class ShareRequest(BaseModel):
+    request: dict
+    response: dict
+
+
+class ShareResponse(BaseModel):
+    token: str
+
+
+class ShareGetResponse(BaseModel):
+    request: dict
+    response: dict
+
+
+# Admin POI models
+class POICreateRequest(BaseModel):
+    poi_id: str
+    place_id: str
+    name: str
+    coords: Coords
+    tags: List[str] = []
+    themes: List[str] = []
+    duration_minutes: int = 60
+    opening_hours: List[dict] = []
+    price_band: Optional[str] = None
+    estimated_cost: Optional[float] = None
+    safety_flags: List[str] = []
+    region: Optional[str] = None
+
+
+class POIUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    coords: Optional[Coords] = None
+    tags: Optional[List[str]] = None
+    themes: Optional[List[str]] = None
+    duration_minutes: Optional[int] = None
+    opening_hours: Optional[List[dict]] = None
+    price_band: Optional[str] = None
+    estimated_cost: Optional[float] = None
+    safety_flags: Optional[List[str]] = None
+    region: Optional[str] = None

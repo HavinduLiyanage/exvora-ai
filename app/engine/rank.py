@@ -1,7 +1,8 @@
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from datetime import datetime
 import logging
 from app.config import get_settings
+from app.engine.reranker import affinity_bonus_for_poi
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -106,15 +107,27 @@ def _calculate_diversity(poi: Dict[str, Any], scheduled_items: List[Dict[str, An
 
 
 def _calculate_health_fit(poi: Dict[str, Any], pace: str) -> float:
-    """Calculate health fit score based on pace preference."""
+    """Calculate health fit score based on pace preference and activity intensity."""
     duration = int(poi.get("duration_minutes") or 60)
+    tags = [t.lower() for t in (poi.get("tags", []) + poi.get("themes", []))]
     
     # Pace-based duration preferences
     if pace == "light":
+        # Penalize strenuous activities
+        if any(strenuous in tags for strenuous in ["hiking", "trekking", "climbing", "long walk"]):
+            return 0.3
         # Prefer shorter activities for light pace
         if duration <= 90:
             return 1.0
         elif duration <= 120:
+            return 0.8
+        else:
+            return 0.6
+    elif pace == "intense":
+        # Boost shorter, faster attractions
+        if duration < 60:
+            return 1.0
+        elif duration < 90:
             return 0.8
         else:
             return 0.6
@@ -126,20 +139,58 @@ def _calculate_health_fit(poi: Dict[str, Any], pace: str) -> float:
             return 0.8
         else:
             return 0.6
-    elif pace == "intense":
-        # Can handle longer activities for intense pace
-        if duration >= 120:
-            return 1.0
-        elif duration >= 90:
-            return 0.9
-        else:
-            return 0.7
     else:
         return 0.8  # Default moderate preference
 
 
+def _calculate_safety_penalty(poi: Dict[str, Any], prefs: Dict[str, Any]) -> float:
+    """Calculate safety penalty based on safety flags and preferences."""
+    safety_flags = poi.get("safety_flags", [])
+    avoid_tags = [t.lower() for t in prefs.get("avoid_tags", [])]
+    
+    penalty = 0.0
+    
+    # Check for crowded penalty
+    if "crowded" in avoid_tags and any("crowded" in flag.lower() for flag in safety_flags):
+        penalty += 0.2
+    
+    # Check for night safety
+    if any("unsafe_night" in flag.lower() for flag in safety_flags):
+        penalty += 0.1
+    
+    return min(penalty, 0.25)  # Cap at 0.25
+
+
+def collect_safety_warnings(day_items: List[Dict[str, Any]]) -> List[str]:
+    """Collect safety warnings for scheduled POIs."""
+    warnings = []
+    
+    for item in day_items:
+        if item.get("type") == "transfer":
+            continue
+            
+        safety_flags = item.get("safety_flags", [])
+        if safety_flags:
+            title = item.get("title", "Activity")
+            warning_parts = []
+            
+            for flag in safety_flags:
+                if "crowded" in flag.lower():
+                    warning_parts.append("crowded at peak hours")
+                elif "unsafe_night" in flag.lower():
+                    warning_parts.append("unsafe at night")
+                else:
+                    warning_parts.append(flag.lower())
+            
+            if warning_parts:
+                warnings.append(f"Heads-up: {title} is {' and '.join(warning_parts)}")
+    
+    return warnings
+
+
 def _score(poi: Dict[str, Any], daily_cap: float | None, prefs: Dict[str, Any], 
-           day_start: str, day_end: str, pace: str, scheduled_items: List[Dict[str, Any]]) -> float:
+           day_start: str, day_end: str, pace: str, scheduled_items: List[Dict[str, Any]],
+           affinities: Optional[Dict[str, float]] = None) -> float:
     """Calculate weighted score for a POI."""
     pref_fit = _calculate_pref_fit(poi, prefs)
     time_fit = _calculate_time_fit(poi, day_start, day_end)
@@ -148,6 +199,9 @@ def _score(poi: Dict[str, Any], daily_cap: float | None, prefs: Dict[str, Any],
     health_fit = _calculate_health_fit(poi, pace)
     
     # Apply weights from config
+    # Calculate safety penalty
+    safety_penalty = _calculate_safety_penalty(poi, prefs)
+    
     weighted_score = (
         settings.RANK_W_PREF * pref_fit +
         settings.RANK_W_TIME * time_fit +
@@ -155,13 +209,17 @@ def _score(poi: Dict[str, Any], daily_cap: float | None, prefs: Dict[str, Any],
         settings.RANK_W_DIV * diversity +
         settings.RANK_W_HEALTH * health_fit
     )
-    
+    # Apply safety penalty and affinity bonus
+    weighted_score -= safety_penalty
+    if affinities:
+        weighted_score += affinity_bonus_for_poi(poi, affinities)
     return weighted_score
 
 
 def rank(cands: List[Dict[str, Any]], daily_cap: float | None, prefs: Dict[str, Any] = None,
           day_start: str = "08:30", day_end: str = "20:00", pace: str = "moderate",
-          scheduled_items: List[Dict[str, Any]] = None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+          scheduled_items: List[Dict[str, Any]] = None,
+          affinities: Optional[Dict[str, float]] = None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Rank candidates by weighted score in descending order."""
     start_time = datetime.now()
     
@@ -173,7 +231,7 @@ def rank(cands: List[Dict[str, Any]], daily_cap: float | None, prefs: Dict[str, 
     # Calculate scores for all candidates
     scored_cands = []
     for cand in cands:
-        score = _score(cand, daily_cap, prefs, day_start, day_end, pace, scheduled_items)
+        score = _score(cand, daily_cap, prefs, day_start, day_end, pace, scheduled_items, affinities)
         scored_cands.append((cand, score))
     
     # Sort by score descending

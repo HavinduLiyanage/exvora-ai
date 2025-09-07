@@ -1,13 +1,21 @@
-from fastapi import APIRouter, HTTPException, Request
-from app.schemas.models import (ItineraryRequest, ItineraryResponse, FeedbackRequest, DayPlan)
+from fastapi import APIRouter, HTTPException, Request, Depends
+from app.schemas.models import (
+    ItineraryRequest, ItineraryResponse, FeedbackRequest, DayPlan,
+    NLPPlanRequest, NLPPlanResponse, ShareRequest, ShareResponse, ShareGetResponse
+)
 from app.dataset.loader import load_pois, pois
 from app.engine.candidates import basic_candidates
 from app.engine.rules import apply_hard_rules
-from app.engine.rank import rank
+from app.engine.rank import rank, collect_safety_warnings
 from app.engine.schedule import schedule_days
 from app.config import get_settings
 from app.api.errors import raise_http_error
 from app.logs import log_json, log_summary
+from app.common.logging import timed
+from app.engine.feedback import repack_day_from_actions
+from app.engine.budget import optimize_day_budget
+from app.nlp.parse import parse_prompt_to_plan
+from app.share.store import create_share_token, get_share_data
 from app.utils.currency import get_currency_from_request, convert_currency
 from datetime import datetime, timedelta
 import time
@@ -20,6 +28,16 @@ logger = logging.getLogger(__name__)
 _rate_limit_store = {}  # ip -> [timestamps]
 
 router = APIRouter()
+
+
+def _check_api_key(request: Request) -> None:
+    """Optional API key check via x-api-key header."""
+    api_key = settings.PUBLIC_API_KEY
+    if not api_key:
+        return
+    provided = request.headers.get("x-api-key")
+    if provided != api_key:
+        raise_http_error(401, "unauthorized", "Missing or invalid API key", ["Provide x-api-key header"]) 
 
 
 def _check_rate_limit(ip: str) -> bool:
@@ -67,7 +85,7 @@ def healthz():
 
 
 @router.post("/itinerary", response_model=ItineraryResponse)
-def build_itinerary(req: ItineraryRequest, request: Request):
+def build_itinerary(req: ItineraryRequest, request: Request, _: None = Depends(_check_api_key)):
     # Rate limiting
     client_ip = request.client.host
     if not _check_rate_limit(client_ip):
@@ -97,12 +115,12 @@ def build_itinerary(req: ItineraryRequest, request: Request):
     prefs = req.preferences.model_dump()
     
     # Stage 1: Candidates
-    start_time = time.time()
-    cands, filter_reasons = basic_candidates(
-        pois(), prefs, date_str=dates[0], day_window=(day_start, day_end),
-        base_place_id=req.trip_context.base_place_id, pace=pace
-    )
-    candidates_time = time.time() - start_time
+    with timed("candidates"):
+        cands, filter_reasons = basic_candidates(
+            pois(), prefs, date_str=dates[0], day_window=(day_start, day_end),
+            base_place_id=req.trip_context.base_place_id, pace=pace
+        )
+    candidates_time = 0
     log_json(request_id, "candidates", 
              ms=round(candidates_time * 1000, 1),
              kept_candidates=len(cands),
@@ -111,9 +129,9 @@ def build_itinerary(req: ItineraryRequest, request: Request):
              dropped_radius=filter_reasons.get('dropped_radius', 0))
     
     # Stage 2: Rules
-    start_time = time.time()
-    cands, rules_filter_reasons = apply_hard_rules(cands, req.constraints.model_dump() if req.constraints else {}, req.locks)
-    rules_time = time.time() - start_time
+    with timed("rules"):
+        cands, rules_filter_reasons = apply_hard_rules(cands, req.constraints.model_dump() if req.constraints else {}, req.locks)
+    rules_time = 0
     log_json(request_id, "rules", 
              ms=round(rules_time * 1000, 1),
              kept_candidates=len(cands),
@@ -122,9 +140,9 @@ def build_itinerary(req: ItineraryRequest, request: Request):
              dropped_locks=rules_filter_reasons.get('dropped_locks', 0))
     
     # Stage 3: Ranking
-    start_time = time.time()
-    ranked, ranking_metrics = rank(cands, (req.constraints.daily_budget_cap if req.constraints else None), prefs, day_start, day_end, pace)
-    rank_time = time.time() - start_time
+    with timed("rank"):
+        ranked, ranking_metrics = rank(cands, (req.constraints.daily_budget_cap if req.constraints else None), prefs, day_start, day_end, pace)
+    rank_time = 0
     log_json(request_id, "rank", 
              ms=round(rank_time * 1000, 1),
              kept_candidates=len(ranked),
@@ -133,10 +151,23 @@ def build_itinerary(req: ItineraryRequest, request: Request):
     # Stage 4: Scheduling
     start_time = time.time()
     try:
-        days = schedule_days(
-            dates, ranked, (req.constraints.daily_budget_cap if req.constraints else None),
-            day_start=day_start, day_end=day_end, locks=req.locks, pace=pace
-        )
+        with timed("schedule"):
+            days = schedule_days(
+                dates, ranked, (req.constraints.daily_budget_cap if req.constraints else None),
+                day_start=day_start, day_end=day_end, locks=req.locks, pace=pace
+            )
+            
+            # Stage 5: Budget optimization
+            with timed("budget_optimize"):
+                optimized_days = []
+                for day in days:
+                    optimized_day, budget_notes = optimize_day_budget(
+                        day, ranked, req.constraints.daily_budget_cap if req.constraints else None
+                    )
+                    if budget_notes:
+                        optimized_day["notes"] = (optimized_day.get("notes", []) + budget_notes)
+                    optimized_days.append(optimized_day)
+                days = optimized_days
     except Exception as e:
         # Only escalate as 424 when Google route verification is explicitly enabled
         if settings.USE_GOOGLE_ROUTES:
@@ -190,16 +221,24 @@ def build_itinerary(req: ItineraryRequest, request: Request):
     # Ensure we always have a valid currency string
     final_currency = request_currency or "LKR"
     
-    # Collect notes for heuristic fallbacks and dropped items
+    # Collect notes for heuristic fallbacks, dropped items, and safety warnings
     notes = []
     if heuristic_transfers > 0:
         notes.append(f"{heuristic_transfers} transfers used heuristic estimates (Google verification unavailable)")
     if failed_verifications > 0:
         notes.append(f"{failed_verifications} transfers failed verification and fell back to heuristic")
     
+    # Add safety warnings for each day
+    for day in days:
+        day_warnings = collect_safety_warnings(day["items"])
+        if day_warnings:
+            if "notes" not in day:
+                day["notes"] = []
+            day["notes"].extend(day_warnings)
+    
     resp = {
         "currency": final_currency,
-        "days": [DayPlan(**day) for day in days],
+        "days": [DayPlan(**day).model_dump() for day in days],
         "totals": {
             "total_cost": converted_cost,
             "total_walking_km": 0.0,  # Placeholder for now
@@ -220,7 +259,14 @@ def build_itinerary(req: ItineraryRequest, request: Request):
                 currency=request_currency,
                 total_transfer_minutes=trip_transfer_minutes)
     
-    return resp
+    # Rate limit headers
+    max_requests = getattr(settings, 'RATE_LIMIT_PER_MINUTE', 10)
+    remaining = max(0, max_requests - len(_rate_limit_store.get(client_ip, [])))
+    from fastapi.responses import JSONResponse
+    response = JSONResponse(content=resp)
+    response.headers["X-RateLimit-Limit"] = str(max_requests)
+    response.headers["X-RateLimit-Remaining"] = str(remaining)
+    return response
 
 
 def _apply_feedback_bias(prefs: dict, actions):
@@ -239,7 +285,7 @@ def _apply_feedback_bias(prefs: dict, actions):
 
 
 @router.post("/itinerary/feedback", response_model=DayPlan)
-def feedback_repack(req: FeedbackRequest, request: Request):
+def feedback_repack(req: FeedbackRequest, request: Request, _: None = Depends(_check_api_key)):
     # Rate limiting
     client_ip = request.client.host
     if not _check_rate_limit(client_ip):
@@ -262,65 +308,73 @@ def feedback_repack(req: FeedbackRequest, request: Request):
     day_start, day_end = req.day_template.start, req.day_template.end
     pace = req.day_template.pace
     
-    # Get candidates excluding removed items
-    cands, filter_reasons = basic_candidates(pois(), prefs, date_str=req.date, day_window=(day_start, day_end), base_place_id=req.trip_context.base_place_id if hasattr(req, 'trip_context') else None, pace=pace)
-    cands = [c for c in cands if c.get("place_id") not in remove_ids]
-    
-    # Apply constraints
-    constraints = req.constraints.model_dump() if req.constraints else {}
-    cands, rules_filter_reasons = apply_hard_rules(cands, constraints, req.locks)
-    ranked, ranking_metrics = rank(cands, constraints.get("daily_budget_cap"), prefs, day_start, day_end, pace)
-    
     try:
-        # Schedule only this one day
-        day_plans = schedule_days(
-            [req.date], ranked, constraints.get("daily_budget_cap"),
-            day_start=day_start, day_end=day_end, locks=req.locks, pace=pace
-        )
-        
-        if not day_plans:
-            raise_http_error(409, "no_feasible_plan", "No feasible day plan found with given constraints and locks", ["Relax constraints or adjust locks"])
-        
-        plan = day_plans[0]
-        
-        # Validate that locks are preserved
-        lock_place_ids = {lk.place_id for lk in req.locks}
-        scheduled_place_ids = {item.get("place_id") for item in plan["items"] if item.get("place_id")}
-        
-        # Check that all locks are present in the scheduled plan
-        missing_locks = lock_place_ids - scheduled_place_ids
-        if missing_locks:
-            raise_http_error(
-                409, 
-                "locks_not_preserved", 
-                f"Cannot preserve locks for places: {missing_locks}",
-                ["Adjust constraints or remove conflicting locks"]
+        with timed("feedback_repack"):
+            merged_items, notes = repack_day_from_actions(
+                datetime.fromisoformat(req.date).date(),
+                req.preferences,  # Pass preferences directly
+                req.constraints if req.constraints else None,  # type: ignore
+                req.locks,
+                req.current_day_plan,
+                req.actions,
+                pois(),
+                req.day_template,  # Pass day template
+                req.base_place_id,  # Pass base place ID
             )
-        
-        # Add notes about the repack
-        notes = []
-        if remove_ids:
-            notes.append(f"Removed {len(remove_ids)} items based on feedback")
-        if filter_reasons.get('dropped_avoid', 0) > 0:
-            notes.append(f"Dropped {filter_reasons['dropped_avoid']} POIs due to avoid tags")
-        if filter_reasons.get('dropped_closed', 0) > 0:
-            notes.append(f"Dropped {filter_reasons['dropped_closed']} POIs due to opening hours")
-        
-        # Add notes to the plan
-        if notes:
-            plan["notes"] = notes
-        
+        # Build DayPlan response
+        plan = {
+            "date": req.date,
+            "summary": {"title": "Day Plan", "est_cost": sum(i.get("estimated_cost", 0) for i in merged_items if i.get("type") != "transfer"), "walking_km": 0.0, "health_load": pace},
+            "items": merged_items,
+            "notes": notes,
+        }
         total_time = time.time() - overall_start
-        log_summary(request_id, round(total_time * 1000, 1),
-                    feedback_date=req.date,
-                    actions_applied=len(req.actions),
-                    locks_preserved=len(req.locks))
-        
-        return DayPlan(**plan)
-        
+        log_summary(request_id, round(total_time * 1000, 1), feedback_date=req.date, actions_applied=len(req.actions), locks_preserved=len(req.locks))
+        from fastapi.responses import JSONResponse
+        response = JSONResponse(content=DayPlan(**plan).model_dump())
+        max_requests = getattr(settings, 'RATE_LIMIT_PER_MINUTE', 10)
+        remaining = max(0, max_requests - len(_rate_limit_store.get(client_ip, [])))
+        response.headers["X-RateLimit-Limit"] = str(max_requests)
+        response.headers["X-RateLimit-Remaining"] = str(remaining)
+        return response
     except Exception as e:
         # Only escalate as 424 when Google route verification is explicitly enabled
         if settings.USE_GOOGLE_ROUTES:
             raise_http_error(424, "transfer_verification_failed", f"Transfer verification failed: {e}", ["Check Google Maps API configuration"])
         # otherwise, re-raise (or you could fall back to heuristic globally)
         raise
+
+
+@router.post("/nlp/plan", response_model=NLPPlanResponse)
+def nlp_plan(req: NLPPlanRequest, request: Request, _: None = Depends(_check_api_key)):
+    """Parse natural language prompt into structured plan components."""
+    try:
+        trip_context, preferences, constraints, locks = parse_prompt_to_plan(req.prompt)
+        return NLPPlanResponse(
+            trip_context=trip_context,
+            preferences=preferences,
+            constraints=constraints,
+            locks=locks
+        )
+    except Exception as e:
+        raise_http_error(400, "parse_error", f"Failed to parse prompt: {e}", ["Check prompt format"])
+
+
+@router.post("/share", response_model=ShareResponse)
+def create_share(req: ShareRequest, request: Request, _: None = Depends(_check_api_key)):
+    """Create a share token for request/response data."""
+    try:
+        token = create_share_token(req.request, req.response)
+        return ShareResponse(token=token)
+    except Exception as e:
+        raise_http_error(500, "share_error", f"Failed to create share token: {e}", ["Try again later"])
+
+
+@router.get("/share/{token}", response_model=ShareGetResponse)
+def get_share(token: str, request: Request, _: None = Depends(_check_api_key)):
+    """Retrieve shared data by token."""
+    data = get_share_data(token)
+    if not data:
+        raise_http_error(404, "share_not_found", "Share token not found or expired", ["Check token or create new share"])
+    
+    return ShareGetResponse(request=data["request"], response=data["response"])

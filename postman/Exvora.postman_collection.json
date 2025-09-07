@@ -57,12 +57,177 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"date\": \"2025-09-10\",\n  \"day_template\": {\n    \"start\": \"09:00\",\n    \"end\": \"18:00\",\n    \"pace\": \"moderate\"\n  },\n  \"trip_context\": {\n    \"base_place_id\": \"colombo_fort\"\n  },\n  \"preferences\": {\n    \"themes\": [\"culture\", \"history\"],\n    \"avoid_tags\": [\"crowded\"]\n  },\n  \"constraints\": {\n    \"daily_budget_cap\": 100,\n    \"max_transfer_minutes\": 30\n  },\n  \"locks\": [\n    {\n      \"start\": \"14:00\",\n      \"end\": \"15:00\",\n      \"title\": \"Lunch Reservation\"\n    }\n  ],\n  \"actions\": [\n    {\n      \"type\": \"remove_item\",\n      \"place_id\": \"temple_of_tooth\"\n    }\n  ]\n}"
+          "raw": "{\n  \"date\": \"2025-09-10\",\n  \"base_place_id\": \"colombo_fort\",\n  \"day_template\": {\n    \"start\": \"09:00\",\n    \"end\": \"18:00\",\n    \"pace\": \"moderate\"\n  },\n  \"modes\": [\"DRIVE\", \"WALK\"],\n  \"preferences\": {\n    \"themes\": [\"culture\", \"history\"],\n    \"avoid_tags\": [\"crowded\"]\n  },\n  \"constraints\": {\n    \"daily_budget_cap\": 100,\n    \"max_transfer_minutes\": 30\n  },\n  \"locks\": [\n    {\n      \"start\": \"14:00\",\n      \"end\": \"15:00\",\n      \"title\": \"Lunch Reservation\"\n    }\n  ],\n  \"current_day_plan\": {\n    \"items\": [\n      {\n        \"start\": \"09:00\",\n        \"end\": \"10:30\",\n        \"place_id\": \"temple_of_tooth\",\n        \"title\": \"Temple of the Tooth\",\n        \"estimated_cost\": 20\n      }\n    ]\n  },\n  \"actions\": [\n    {\n      \"type\": \"remove_item\",\n      \"place_id\": \"temple_of_tooth\"\n    },\n    {\n      \"type\": \"daily_signal\",\n      \"energy\": \"low\"\n    }\n  ]\n}"
         },
         "url": {
           "raw": "{{base_url}}/v1/itinerary/feedback",
           "host": ["{{base_url}}"],
           "path": ["v1", "itinerary", "feedback"]
+        }
+      }
+    },
+    {
+      "name": "NLP Plan",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"prompt\": \"3 days in Kandy, love temples and hikes, avoid crowded places, tight budget\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/v1/nlp/plan",
+          "host": ["{{base_url}}"],
+          "path": ["v1", "nlp", "plan"]
+        }
+      }
+    },
+    {
+      "name": "Create Share Token",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"request\": {\n    \"trip_context\": {\n      \"base_place_id\": \"ChIJkandy\",\n      \"date_range\": {\n        \"start\": \"2025-01-01\",\n        \"end\": \"2025-01-03\"\n      },\n      \"day_template\": {\n        \"start\": \"08:30\",\n        \"end\": \"20:00\",\n        \"pace\": \"moderate\"\n      },\n      \"modes\": [\"DRIVE\", \"WALK\"]\n    },\n    \"preferences\": {\n      \"themes\": [\"Culture\"],\n      \"activity_tags\": [\"Hiking\"],\n      \"avoid_tags\": [\"crowded\"]\n    },\n    \"constraints\": {\n      \"daily_budget_cap\": 80,\n      \"max_transfer_minutes\": 90\n    },\n    \"locks\": []\n  },\n  \"response\": {\n    \"currency\": \"LKR\",\n    \"days\": [\n      {\n        \"date\": \"2025-01-01\",\n        \"summary\": {\n          \"title\": \"Day Plan\",\n          \"est_cost\": 60.0,\n          \"health_load\": \"moderate\"\n        },\n        \"items\": [\n          {\n            \"start\": \"09:00\",\n            \"end\": \"10:30\",\n            \"place_id\": \"temple_of_tooth\",\n            \"title\": \"Temple of the Tooth\",\n            \"estimated_cost\": 20.0\n          }\n        ]\n      }\n    ]\n  }\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/v1/share",
+          "host": ["{{base_url}}"],
+          "path": ["v1", "share"]
+        }
+      }
+    },
+    {
+      "name": "Get Share Data",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/v1/share/{{share_token}}",
+          "host": ["{{base_url}}"],
+          "path": ["v1", "share", "{{share_token}}"]
+        }
+      }
+    },
+    {
+      "name": "Admin - List POIs",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-admin-key",
+            "value": "{{admin_key}}"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/admin/pois?page=1&limit=10",
+          "host": ["{{base_url}}"],
+          "path": ["admin", "pois"],
+          "query": [
+            {
+              "key": "page",
+              "value": "1"
+            },
+            {
+              "key": "limit",
+              "value": "10"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Admin - Create POI",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "x-admin-key",
+            "value": "{{admin_key}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"poi_id\": \"test_temple\",\n  \"place_id\": \"ChIJtest\",\n  \"name\": \"Test Temple\",\n  \"coords\": {\n    \"lat\": 7.2906,\n    \"lng\": 80.6337\n  },\n  \"tags\": [\"temple\", \"culture\"],\n  \"themes\": [\"Culture\", \"Religion\"],\n  \"duration_minutes\": 90,\n  \"opening_hours\": [\n    {\n      \"day\": \"monday\",\n      \"open\": \"06:00\",\n      \"close\": \"18:00\"\n    }\n  ],\n  \"price_band\": \"free\",\n  \"estimated_cost\": 0,\n  \"safety_flags\": [],\n  \"region\": \"Kandy\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/admin/pois",
+          "host": ["{{base_url}}"],
+          "path": ["admin", "pois"]
+        }
+      }
+    },
+    {
+      "name": "Admin - Update POI",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "x-admin-key",
+            "value": "{{admin_key}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Updated Test Temple\",\n  \"estimated_cost\": 50,\n  \"safety_flags\": [\"crowded_peak_hours\"]\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/admin/pois/test_temple",
+          "host": ["{{base_url}}"],
+          "path": ["admin", "pois", "test_temple"]
+        }
+      }
+    },
+    {
+      "name": "Admin - Get POI",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-admin-key",
+            "value": "{{admin_key}}"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/admin/pois/test_temple",
+          "host": ["{{base_url}}"],
+          "path": ["admin", "pois", "test_temple"]
+        }
+      }
+    },
+    {
+      "name": "Admin - Delete POI",
+      "request": {
+        "method": "DELETE",
+        "header": [
+          {
+            "key": "x-admin-key",
+            "value": "{{admin_key}}"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/admin/pois/test_temple",
+          "host": ["{{base_url}}"],
+          "path": ["admin", "pois", "test_temple"]
         }
       }
     }

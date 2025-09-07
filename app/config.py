@@ -4,11 +4,17 @@ from functools import lru_cache
 
 
 class Settings(BaseSettings):
+    PUBLIC_API_KEY: str | None = None
+    ADMIN_API_KEY: str | None = None
     USE_GOOGLE_ROUTES: bool = Field(default=False)
     GOOGLE_MAPS_API_KEY: str | None = None
     TRANSFER_CACHE_TTL_SECONDS: int = 600   # 10 min
     TRANSFER_MAX_CALLS_PER_REQUEST: int = 30  # safety limit
     RATE_LIMIT_PER_MINUTE: int = 50  # max requests per minute per IP (increased for testing)
+    SHARE_TTL_MIN: int = 1440  # 24 hours
+    RERANK_EMA_ALPHA: float = 0.25
+    RANK_W_HEALTH: float = 0.1
+    SAFETY_CROWD_PENALTY: float = 0.2
     
     # P2: Currency
     DEFAULT_CURRENCY: str = Field(default="USD", description="Default currency for responses")
