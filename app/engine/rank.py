@@ -3,37 +3,20 @@ from datetime import datetime
 import logging
 from app.config import get_settings
 from app.engine.reranker import affinity_bonus_for_poi
+from app.engine.ml_pref import get_preference_scorer
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-def _calculate_pref_fit(poi: Dict[str, Any], prefs: Dict[str, Any]) -> float:
-    """Calculate preference fit score based on theme/tag overlap."""
-    themes = set(map(str.lower, prefs.get("themes", [])))
-    avoid_tags = set(map(str.lower, prefs.get("avoid_tags", [])))
+def _calculate_pref_fit(poi: Dict[str, Any], prefs: Dict[str, Any], context: Dict[str, Any] = None) -> float:
+    """Calculate preference fit score using ML model or fallback heuristic."""
+    if context is None:
+        context = {}
     
-    if not themes:
-        return 0.5  # Neutral score if no themes specified
-    
-    poi_themes = set(map(str.lower, poi.get("themes", [])))
-    poi_tags = set(map(str.lower, poi.get("tags", [])))
-    
-    # Check for avoid tags
-    if avoid_tags & poi_tags:
-        return 0.0
-    
-    # Calculate theme overlap
-    if not poi_themes:
-        return 0.3  # Low score for POIs without themes
-    
-    overlap = len(themes & poi_themes)
-    total = len(themes)
-    
-    if total == 0:
-        return 0.5
-    
-    return overlap / total
+    # Use the global preference scorer
+    scorer = get_preference_scorer()
+    return scorer.predict_pref_fit(poi, context, prefs)
 
 
 def _calculate_time_fit(poi: Dict[str, Any], day_start: str, day_end: str) -> float:
@@ -190,9 +173,12 @@ def collect_safety_warnings(day_items: List[Dict[str, Any]]) -> List[str]:
 
 def _score(poi: Dict[str, Any], daily_cap: float | None, prefs: Dict[str, Any], 
            day_start: str, day_end: str, pace: str, scheduled_items: List[Dict[str, Any]],
-           affinities: Optional[Dict[str, float]] = None) -> float:
+           affinities: Optional[Dict[str, float]] = None, context: Dict[str, Any] = None) -> float:
     """Calculate weighted score for a POI."""
-    pref_fit = _calculate_pref_fit(poi, prefs)
+    if context is None:
+        context = {}
+    
+    pref_fit = _calculate_pref_fit(poi, prefs, context)
     time_fit = _calculate_time_fit(poi, day_start, day_end)
     budget_fit = _calculate_budget_fit(poi, daily_cap)
     diversity = _calculate_diversity(poi, scheduled_items)
@@ -219,7 +205,7 @@ def _score(poi: Dict[str, Any], daily_cap: float | None, prefs: Dict[str, Any],
 def rank(cands: List[Dict[str, Any]], daily_cap: float | None, prefs: Dict[str, Any] = None,
           day_start: str = "08:30", day_end: str = "20:00", pace: str = "moderate",
           scheduled_items: List[Dict[str, Any]] = None,
-          affinities: Optional[Dict[str, float]] = None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+          affinities: Optional[Dict[str, float]] = None, context: Dict[str, Any] = None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Rank candidates by weighted score in descending order."""
     start_time = datetime.now()
     
@@ -227,11 +213,17 @@ def rank(cands: List[Dict[str, Any]], daily_cap: float | None, prefs: Dict[str, 
         prefs = {}
     if scheduled_items is None:
         scheduled_items = []
+    if context is None:
+        context = {"day_template": {"pace": pace}}
+    
+    # Get preference scorer for model version
+    scorer = get_preference_scorer()
+    pref_model_version = scorer.version()
     
     # Calculate scores for all candidates
     scored_cands = []
     for cand in cands:
-        score = _score(cand, daily_cap, prefs, day_start, day_end, pace, scheduled_items, affinities)
+        score = _score(cand, daily_cap, prefs, day_start, day_end, pace, scheduled_items, affinities, context)
         scored_cands.append((cand, score))
     
     # Sort by score descending
@@ -239,7 +231,7 @@ def rank(cands: List[Dict[str, Any]], daily_cap: float | None, prefs: Dict[str, 
     
     # Calculate average scores for logging
     if scored_cands:
-        avg_pref = sum(_calculate_pref_fit(cand, prefs) for cand, _ in scored_cands) / len(scored_cands)
+        avg_pref = sum(_calculate_pref_fit(cand, prefs, context) for cand, _ in scored_cands) / len(scored_cands)
         avg_time = sum(_calculate_time_fit(cand, day_start, day_end) for cand, _ in scored_cands) / len(scored_cands)
         avg_budget = sum(_calculate_budget_fit(cand, daily_cap) for cand, _ in scored_cands) / len(scored_cands)
     else:
@@ -249,6 +241,7 @@ def rank(cands: List[Dict[str, Any]], daily_cap: float | None, prefs: Dict[str, 
     
     ranking_metrics = {
         "model_version": "balanced_v0",
+        "pref_model_version": pref_model_version,
         "avg_pref_fit": round(avg_pref, 3),
         "avg_time_fit": round(avg_time, 3),
         "avg_budget_fit": round(avg_budget, 3),

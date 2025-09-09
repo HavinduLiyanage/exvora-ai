@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     # P1: Google verification
     GOOGLE_PER_REQUEST_MAX_CALLS: int = Field(default=30, description="Max Google API calls per request")
     GOOGLE_VERIFY_FAILURE_424: bool = Field(default=False, description="Return 424 on Google verification failure")
+    
+    # Legacy settings
+    MAX_ITEMS_PER_DAY: int = Field(default=4, description="Maximum items per day (legacy)")
 
     class Config:
         env_file = ".env"

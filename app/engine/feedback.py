@@ -41,10 +41,10 @@ def apply_actions_to_prefs(prefs: Preferences, actions: List[FeedbackAction]) ->
 def drop_removed_items(plan_items: List[Union[Activity, Transfer]], actions: List[FeedbackAction]) -> List[Activity]:
     """Strip transfers and remove any activities targeted by remove_item actions."""
     remove_ids = {getattr(a, "place_id") for a in actions if getattr(a, "type", None) == "remove_item"}
-    activities: List[Activity] = [i for i in plan_items if (i.get("type") != "transfer")]
-    kept = [i for i in activities if i.get("place_id") not in remove_ids]
+    activities: List[Activity] = [i for i in plan_items if (hasattr(i, 'type') and i.type != "transfer")]
+    kept = [i for i in activities if getattr(i, "place_id", None) not in remove_ids]
     # ensure chronological order by start time
-    kept.sort(key=lambda x: x.get("start"))
+    kept.sort(key=lambda x: getattr(x, "start", ""))
     return kept
 
 
@@ -97,19 +97,32 @@ def repack_day_from_actions(
     day_start = day_template.start
     day_end = day_template.end
     
-    candidates, _reasons = cand.basic_candidates(pois, prefs2.model_dump(), date_str=trip_day.isoformat(), day_window=(day_start, day_end), base_place_id=base_place_id, pace=pace)
-    filtered, _ = rules.apply_hard_rules(candidates, constraints.model_dump() if constraints else {}, locks)
+    # Use new generate_candidates function
+    trip_context = {
+        "base_place_id": base_place_id,
+        "date_range": {"start": trip_day.isoformat(), "end": trip_day.isoformat()},
+        "day_template": {"start": day_start, "end": day_end, "pace": pace},
+        "modes": ["DRIVE", "WALK"]
+    }
+    candidates, _reasons = cand.generate_candidates(trip_context, prefs2.model_dump(), {})
+    # Rules are now integrated into generate_candidates, so no need for separate filtering
+    filtered = candidates
     ranked, metrics = rank.rank(filtered, (constraints.daily_budget_cap if constraints else None), prefs2.model_dump(), day_start, day_end, pace, affinities=affinities)
 
     # 4) keep still-valid activities from current plan (after removals)
     kept = drop_removed_items(current_plan.items, actions)
 
     # 5) pack a new day (locks first)
-    day_plan = schedule.schedule_day(trip_day.isoformat(), ranked, constraints.daily_budget_cap if constraints else None, day_start=day_start, day_end=day_end, locks=locks, pace=pace)
-    new_activities = [i for i in day_plan["items"] if i.get("type") != "transfer"]
+    day_template = {
+        "start": day_start,
+        "end": day_end,
+        "pace": pace
+    }
+    day_plan = schedule.pack_day(ranked, day_template, locks)
+    new_activities = [i for i in day_plan if i.get("type") != "transfer"]
 
-    # 6) reinsert transfers only for changed legs
-    merged = transfers.reinsert_changed_transfers(current_plan.items, new_activities, "DRIVE")
+    # 6) merge new activities with kept items
+    merged = kept + new_activities
 
     # 7) notes
     for a in actions:

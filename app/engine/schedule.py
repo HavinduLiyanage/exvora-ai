@@ -1,252 +1,220 @@
-from typing import List, Dict, Any, Tuple
-from app.engine.transfers import verify, verify_sequence, reset_transfer_call_counter
-from app.config import get_settings
-from datetime import datetime
-import logging
+"""
+Day scheduler for packing activities with transfer placeholders.
+"""
 
-settings = get_settings()
-logger = logging.getLogger(__name__)
-
-
-def _min(s: str) -> int:
-    h, m = map(int, s.split(":"))
-    return h*60 + m
+from __future__ import annotations
+from typing import List, Dict, Any
+from datetime import datetime, timedelta
 
 
-def _fmt(m: int) -> str:
-    return f"{m//60:02d}:{m%60:02d}"
-
-
-def _locks_to_items(locks: List[Any]) -> List[Dict[str,Any]]:
-    # turn locks into Activity blocks; if no start/end, treat as 60m placeholder
+def pack_day(candidates_for_day: List[Dict[str, Any]], day_template: Dict[str, str], locks: List[Dict[str, Any]] | None = None) -> List[Dict[str, Any]]:
+    """
+    Greedy packing:
+      - Respect day_template start/end and activity duration_minutes
+      - Keep locks at fixed times; fill remaining slots around them
+      - Insert transfer placeholders between consecutive activities:
+        { "type":"transfer","from_place_id":A,"to_place_id":B,"mode":"DRIVE","duration_minutes":None,"distance_km":None,"source":"heuristic" }
+    Return list of items (activity/transfer alternation).
+    """
+    if locks is None:
+        locks = []
+    
     items = []
-    for lk in locks:
-        st = lk.start or "09:00"
-        en = lk.end or _fmt(_min(st) + 60)
-        items.append({
-            "start": st, 
-            "end": en, 
-            "place_id": lk.place_id, 
-            "title": lk.title or "Locked Activity", 
-            "estimated_cost": 0
-        })
-    # sort by start time
-    return sorted(items, key=lambda a: _min(a["start"]))
-
-
-def _build_gaps(day_start: str, day_end: str, lock_items: List[Dict[str,Any]]) -> List[Tuple[int,int]]:
-    cur = _min(day_start)
-    gaps = []
-    for it in lock_items:
-        s, e = _min(it["start"]), _min(it["end"])
-        if s > cur:
-            gaps.append((cur, s))
-        cur = max(cur, e)
-    if cur < _min(day_end):
-        gaps.append((cur, _min(day_end)))
-    return gaps
-
-
-def _fits_budget(cost_sum: float, add: float, cap: float|None) -> bool:
-    if cap is None: 
-        return True
-    return cost_sum + (add or 0) <= cap
-
-
-def _find_open_window(poi: Dict[str, Any], date_str: str, start_time: int, end_time: int) -> Tuple[int, int]:
-    """Find the next feasible open window for a POI within the given time range."""
-    hours = poi.get("opening_hours") or {}
-    d = datetime.fromisoformat(date_str)
-    dow = ["mon","tue","wed","thu","fri","sat","sun"][d.weekday()]
-    spans = hours.get(dow, [])
+    day_start = day_template.get("start", "08:00")
+    day_end = day_template.get("end", "20:00")
+    pace = day_template.get("pace", "moderate")
     
-    if not spans:
-        # If no opening hours specified, use the requested time range
-        return start_time, end_time
-    
-    # Find the first open window that overlaps with our time range
-    for span in spans:
-        open_min = _min(span["open"])
-        close_min = _min(span["close"])
-        
-        # Check if this window overlaps with our range
-        if open_min < end_time and close_min > start_time:
-            # Calculate the actual available window
-            window_start = max(start_time, open_min)
-            window_end = min(end_time, close_min)
-            
-            if window_end - window_start >= 60:  # At least 1 hour available
-                return window_start, window_end
-    
-    # If no suitable window found, return the requested range
-    return start_time, end_time
-
-
-def _should_insert_break(continuous_minutes: int) -> bool:
-    """Determine if a break should be inserted after continuous activity."""
-    return continuous_minutes >= settings.BREAK_AFTER_MINUTES
-
-
-def _insert_break(items: List[Dict[str, Any]], current_time: int) -> int:
-    """Insert a break item and return the new current time."""
-    break_duration = 30  # 30-minute break
-    
-    items.append({
-        "type": "break",
-        "start": _fmt(current_time),
-        "end": _fmt(current_time + break_duration),
-        "title": "Break",
-        "duration_minutes": break_duration
-    })
-    
-    return current_time + break_duration
-
-
-def schedule_day(date: str, ranked: List[Dict[str, Any]], daily_cap: float | None, *,
-                 day_start: str="08:30", day_end: str="20:00", locks: List[Any]=[], pace: str="moderate") -> Dict[str, Any]:
-    """Schedule activities for a day with locks-first, opening-hours-aware, and break-inserting approach."""
-    start_time = datetime.now()
-    
-    reset_transfer_call_counter()
-    cost_sum = 0.0
-    items: List[Dict[str,Any]] = []
-    items_added = 0
-    max_items = getattr(settings, 'MAX_ITEMS_PER_DAY', 4)
-    
-    # Track continuous activity time for break insertion
-    continuous_minutes = 0
-    notes = []
-
-    # 1) place locks first
-    lock_items = _locks_to_items(locks)
-    items.extend(lock_items)
-    
-    # Locks count toward the item limit
-    items_added = len(lock_items)
-
-    # 2) build time gaps
-    gaps = _build_gaps(day_start, day_end, lock_items)
-
-    # 3) fill each gap with top ranked that fit time & budget
-    for gstart, gend in gaps:
-        if items_added >= max_items:
-            break
-            
-        t = gstart
-        last_place_id = None if not items else items[-1].get("place_id")
-        
-        for poi in list(ranked):  # iterate a snapshot; we'll remove placed ones
-            if items_added >= max_items:
-                break
-                
-            dur = int(poi.get("duration_minutes") or 60)
-            cost = float(poi.get("estimated_cost") or 0)
-            
-            # Check if activity fits in gap
-            if t + dur > gend:
-                continue
-                
-            if not _fits_budget(cost_sum, cost, daily_cap):
-                continue
-
-            # Find feasible open window for this POI within the available gap
-            open_start, open_end = _find_open_window(poi, date, t, gend)
-            
-            # Check if we can fit the activity in the open window
-            if open_start + dur > open_end:
-                # Activity doesn't fit in open window
-                notes.append(f"Could not schedule {poi.get('name', 'POI')} - insufficient open hours")
-                continue
-            
-            # Check if we need to insert a break
-            if _should_insert_break(continuous_minutes):
-                t = _insert_break(items, t)
-                continuous_minutes = 0
-            
-            # add transfer if previous thing is an activity
-            if items and items[-1].get("type") not in ["transfer", "break"] and last_place_id and poi["place_id"] != last_place_id:
-                tr = verify(last_place_id, poi["place_id"], "DRIVE", _fmt(t))
-                items.append({
-                    "type":"transfer",
-                    "from_place_id": last_place_id,
-                    "to_place_id": poi["place_id"],
-                    "mode":"DRIVE", 
-                    **tr
-                })
-                t += tr["duration_minutes"]
-
-            # add activity
-            items.append({
-                "start": _fmt(open_start), 
-                "end": _fmt(open_start + dur), 
-                "place_id": poi["place_id"], 
-                "title": poi.get("name"), 
-                "estimated_cost": cost,
-                "duration_minutes": dur
-            })
-            
-            t = open_start + dur
-            cost_sum += cost
-            last_place_id = poi["place_id"]
-            ranked.remove(poi)
-            items_added += 1
-            
-            # Update continuous activity tracking
-            continuous_minutes += dur
-
-    # clean dangling transfer
-    if items and items[-1].get("type") == "transfer":
-        items.pop()
-
-    # 4) Final verification of transfers when Google Routes is enabled
-    if settings.USE_GOOGLE_ROUTES:
+    # Convert time strings to minutes since midnight
+    def time_to_minutes(time_str: str) -> int:
         try:
-            # Extract just the activity items (non-transfer, non-break) for sequence verification
-            activity_items = [item for item in items if item.get("type") not in ["transfer", "break"]]
-            verified_items = verify_sequence(activity_items, "DRIVE")
-            
-            # Replace items with verified sequence
-            items = verified_items
-            
-            # Check if any transfers failed verification
-            failed_transfers = [item for item in items if item.get("type") == "transfer" and item.get("verify_failed", 0) == 1]
-            if failed_transfers and settings.GOOGLE_VERIFY_FAILURE_424:
-                notes.append(f"Warning: {len(failed_transfers)} transfers failed Google verification, using heuristic estimates")
-                
-        except Exception as e:
-            logger.warning(f"Google verification failed for day {date}: {e}")
-            notes.append("Google verification failed, using heuristic transfer estimates")
-
-    duration = (datetime.now() - start_time).total_seconds()
-    logger.debug(f"Day scheduling completed: {len(items)} items scheduled in {duration:.3f}s")
-
-    return {
-        "date": date,
-        "summary": {"title":"Day Plan","est_cost": cost_sum,"walking_km": 0.0,"health_load": pace},
-        "items": items,
-        "notes": notes
-    }
-
-
-def schedule_days(dates: List[str], ranked: List[Dict[str, Any]], daily_cap: float | None, *,
-                  day_start: str="08:30", day_end: str="20:00", locks: List[Any]=[], pace: str="moderate") -> List[Dict[str, Any]]:
-    """Schedule activities for multiple days, building fresh timeline for each day."""
-    start_time = datetime.now()
+            hour, minute = map(int, time_str.split(":"))
+            return hour * 60 + minute
+        except:
+            return 0
     
-    days = []
+    def minutes_to_time(minutes: int) -> str:
+        hour = minutes // 60
+        minute = minutes % 60
+        return f"{hour:02d}:{minute:02d}"
     
-    for date in dates:
-        # Create a fresh copy of ranked candidates for each day
-        day_candidates = ranked.copy()
+    day_start_min = time_to_minutes(day_start)
+    day_end_min = time_to_minutes(day_end)
+    
+    # Sort locks by start time
+    sorted_locks = sorted(locks, key=lambda x: time_to_minutes(x.get("start", "08:00")))
+    
+    # Create a list of available time slots
+    available_slots = []
+    current_time = day_start_min
+    
+    for lock in sorted_locks:
+        lock_start = time_to_minutes(lock.get("start", "08:00"))
+        lock_end = time_to_minutes(lock.get("end", "08:00"))
         
-        # Schedule this day
-        day_plan = schedule_day(
-            date, day_candidates, daily_cap,
-            day_start=day_start, day_end=day_end, locks=locks, pace=pace
-        )
-        days.append(day_plan)
+        # Add slot before lock if there's time
+        if lock_start > current_time:
+            available_slots.append((current_time, lock_start))
+        
+        # Add the locked slot
+        available_slots.append((lock_start, lock_end))
+        current_time = lock_end
     
-    duration = (datetime.now() - start_time).total_seconds()
-    logger.debug(f"Multi-day scheduling completed: {len(days)} days scheduled in {duration:.3f}s")
+    # Add remaining time after last lock
+    if current_time < day_end_min:
+        available_slots.append((current_time, day_end_min))
     
-    return days
+    # Pack activities into available slots
+    current_poi = None
+    used_pois = set()
+    
+    # Pre-mark locked POIs as used
+    for lock in locks:
+        used_pois.add(lock.get("poi_id"))
+    
+    for slot_start, slot_end in available_slots:
+        slot_duration = slot_end - slot_start
+        current_slot_time = slot_start
+        
+        # Check if this is a locked slot
+        is_locked_slot = False
+        locked_activity = None
+        for lock in locks:
+            lock_start = time_to_minutes(lock.get("start", "08:00"))
+            if slot_start == lock_start:
+                is_locked_slot = True
+                # Find the locked activity in candidates
+                for candidate in candidates_for_day:
+                    if candidate.get("poi_id") == lock.get("poi_id"):
+                        locked_activity = candidate
+                        break
+                # Mark this POI as used so it won't be scheduled again
+                if locked_activity:
+                    used_pois.add(locked_activity.get("poi_id"))
+                break
+        
+        if is_locked_slot and locked_activity:
+            # Add transfer if we're moving to a new POI
+            if current_poi and current_poi.get("poi_id") != locked_activity.get("poi_id"):
+                transfer = {
+                    "type": "transfer",
+                    "from_place_id": current_poi.get("place_id"),
+                    "to_place_id": locked_activity.get("place_id"),
+                    "mode": "DRIVE",
+                    "duration_minutes": None,
+                    "distance_km": None,
+                    "source": "heuristic"
+                }
+                items.append(transfer)
+            
+            # Add the locked activity
+            activity_start = minutes_to_time(slot_start)
+            activity_end = minutes_to_time(slot_end)
+            
+            activity_item = {
+                "type": "activity",
+                "poi_id": locked_activity.get("poi_id"),
+                "place_id": locked_activity.get("place_id"),
+                "title": locked_activity.get("title", locked_activity.get("name", "")),
+                "start": activity_start,
+                "end": activity_end,
+                "duration_minutes": slot_end - slot_start,
+                "estimated_cost": locked_activity.get("estimated_cost", 0),
+                "tags": locked_activity.get("tags", []),
+                "price_band": locked_activity.get("price_band", "low"),
+                "opening_hours": locked_activity.get("opening_hours", {}),
+                "locked": True
+            }
+            items.append(activity_item)
+            current_poi = locked_activity
+            used_pois.add(locked_activity.get("poi_id"))
+        else:
+            # Pack multiple activities in this slot if they fit
+            while current_slot_time < slot_end:
+                # Find best activity for remaining time in slot
+                best_activity = None
+                best_score = -1
+                
+                for candidate in candidates_for_day:
+                    duration = candidate.get("duration_minutes", 60)
+                    
+                    # Skip if activity doesn't fit in remaining time
+                    if duration > (slot_end - current_slot_time):
+                        continue
+                    
+                    # Skip if we've already used this POI
+                    if candidate.get("poi_id") in used_pois:
+                        continue
+                    
+                    # Score based on opening alignment and theme overlap
+                    score = candidate.get("opening_align", 0.0)
+                    if score > best_score:
+                        best_score = score
+                        best_activity = candidate
+                
+                if best_activity:
+                    # Add transfer if we're moving to a new POI
+                    if current_poi and current_poi.get("poi_id") != best_activity.get("poi_id"):
+                        transfer = {
+                            "type": "transfer",
+                            "from_place_id": current_poi.get("place_id"),
+                            "to_place_id": best_activity.get("place_id"),
+                            "mode": "DRIVE",
+                            "duration_minutes": None,
+                            "distance_km": None,
+                            "source": "heuristic"
+                        }
+                        items.append(transfer)
+                    
+                    # Add the activity
+                    activity_start = minutes_to_time(current_slot_time)
+                    activity_end = minutes_to_time(current_slot_time + best_activity.get("duration_minutes", 60))
+                    
+                    activity_item = {
+                        "type": "activity",
+                        "poi_id": best_activity.get("poi_id"),
+                        "place_id": best_activity.get("place_id"),
+                        "title": best_activity.get("title", best_activity.get("name", "")),
+                        "start": activity_start,
+                        "end": activity_end,
+                        "duration_minutes": best_activity.get("duration_minutes", 60),
+                        "estimated_cost": best_activity.get("estimated_cost", 0),
+                        "tags": best_activity.get("tags", []),
+                        "price_band": best_activity.get("price_band", "low"),
+                        "opening_hours": best_activity.get("opening_hours", {}),
+                        "locked": False
+                    }
+                    items.append(activity_item)
+                    current_poi = best_activity
+                    used_pois.add(best_activity.get("poi_id"))
+                    
+                    # Move to next time slot
+                    current_slot_time += best_activity.get("duration_minutes", 60)
+                else:
+                    # No more activities fit, break out of slot
+                    break
+    
+    # Add breaks if needed based on pace
+    if pace == "slow" and len(items) > 2:
+        # Add a break after every 2 activities
+        break_items = []
+        for i, item in enumerate(items):
+            if item.get("type") == "activity" and i > 0 and (i + 1) % 3 == 0:
+                # Add break after this activity
+                break_start = time_to_minutes(item.get("end", "12:00"))
+                break_end = break_start + 30  # 30 minute break
+                
+                if break_end <= day_end_min:
+                    break_item = {
+                        "type": "break",
+                        "start": minutes_to_time(break_start),
+                        "end": minutes_to_time(break_end),
+                        "title": "Break",
+                        "duration_minutes": 30
+                    }
+                    break_items.append((i + 1, break_item))
+        
+        # Insert breaks in reverse order to maintain indices
+        for i, break_item in reversed(break_items):
+            items.insert(i, break_item)
+    
+    return items

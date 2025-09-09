@@ -3,6 +3,7 @@ from fastapi.exceptions import RequestValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 from app.api.routes import router
 from app.api.admin import router as admin_router
+from app.api.rerank import router as rerank_router
 from app.api.errors import error_response
 import uuid
 import time
@@ -40,6 +41,7 @@ app = FastAPI(title="Exvora Stateless Itinerary API", version="0.1.0")
 app.add_middleware(RequestIDMiddleware)
 app.include_router(router, prefix="/v1")
 app.include_router(admin_router)
+app.include_router(rerank_router, prefix="/v1")
 
 
 @app.exception_handler(RequestValidationError)

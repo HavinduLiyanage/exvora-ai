@@ -1,138 +1,241 @@
+"""
+Deterministic candidate generator with explainable drop reasons.
+"""
+
+from __future__ import annotations
 from typing import List, Dict, Any, Tuple
-from datetime import datetime
-import logging
-import math
-from app.config import get_settings
+from math import radians, sin, cos, asin, sqrt
+from app.dataset.fixtures import load_fixture_pois
 
-logger = logging.getLogger(__name__)
-settings = get_settings()
+PRICE_ORDER = {"free": 0, "low": 1, "medium": 2, "high": 3}
 
-
-def _time_to_min(s: str) -> int:
-    h, m = map(int, s.split(":"))
-    return h*60 + m
+# Default radius for region windowing (km)
+DEFAULT_RADIUS_KM = 50
 
 
-def _is_open(poi: Dict[str,Any], date_str: str, day_start: str, day_end: str) -> bool:
-    # expect poi["opening_hours"][dow] = [{"open":"HH:MM","close":"HH:MM"}, ...]
-    hours = poi.get("opening_hours") or {}
-    d = datetime.fromisoformat(date_str)
-    dow = ["mon","tue","wed","thu","fri","sat","sun"][d.weekday()]
-    spans = hours.get(dow, [])
-    if not spans:
-        return False
-    ds, de = _time_to_min(day_start), _time_to_min(day_end)
-    for span in spans:
-        os, oe = _time_to_min(span["open"]), _time_to_min(span["close"])
-        if os < de and oe > ds:  # overlap
-            return True
-    return False
-
-
-def _in_season(poi: Dict[str,Any], date_str: str) -> bool:
-    season = poi.get("seasonality") or ["All"]
-    if "All" in season:
-        return True
-    month = datetime.fromisoformat(date_str).strftime("%b")  # "Jan".."Dec"
-    return month in season
-
-
-def _calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Calculate distance between two points using Haversine formula (km)."""
-    R = 6371  # Earth's radius in km
+def load_all_pois() -> List[Dict[str, Any]]:
+    """
+    Return POIs as list[dict] with fields:
+    poi_id, place_id, name/title, tags, themes, price_band, estimated_cost,
+    opening_hours, seasonality, duration_minutes, safety_flags, coords {lat,lng}, region, last_verified
+    Load from fixture dataset.
+    """
+    pois = load_fixture_pois()
     
-    lat1_rad = math.radians(lat1)
-    lat2_rad = math.radians(lat2)
-    delta_lat = math.radians(lat2 - lat1)
-    delta_lon = math.radians(lon2 - lon1)
-    
-    a = (math.sin(delta_lat / 2) ** 2 + 
-         math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(delta_lon / 2) ** 2)
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    
-    return R * c
-
-
-def _within_radius(poi: Dict[str, Any], base_place_id: str, pois: List[Dict[str, Any]], pace: str) -> bool:
-    """Check if POI is within radius based on pace."""
-    # Find base place coordinates
-    base_place = next((p for p in pois if p.get("place_id") == base_place_id), None)
-    if not base_place or "coords" not in base_place:
-        return True  # If no base place or coords, allow all
-    
-    base_lat, base_lon = base_place["coords"]["lat"], base_place["coords"]["lon"]
-    
-    if "coords" not in poi:
-        return True  # If POI has no coords, allow it
-    
-    poi_lat, poi_lon = poi["coords"]["lat"], poi["coords"]["lon"]
-    distance = _calculate_distance(base_lat, base_lon, poi_lat, poi_lon)
-    
-    # Get radius based on pace
-    if pace == "light":
-        max_radius = settings.RADIUS_KM_LIGHT
-    elif pace == "moderate":
-        max_radius = settings.RADIUS_KM_MODERATE
-    elif pace == "intense":
-        max_radius = settings.RADIUS_KM_INTENSE
-    else:
-        max_radius = settings.RADIUS_KM_MODERATE  # Default
-    
-    return distance <= max_radius
-
-
-def basic_candidates(pois: List[Dict[str, Any]], prefs: Dict[str, Any], *,
-                     date_str: str, day_window: tuple[str,str], base_place_id: str = None, 
-                     pace: str = "moderate") -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
-    """Filter POIs based on preferences, availability, seasonality, and radius."""
-    start_time = datetime.now()
-    
-    themes = set(map(str.lower, prefs.get("themes", [])))
-    avoid = set(map(str.lower, prefs.get("avoid_tags", [])))
-    day_start, day_end = day_window
-    
-    # Track filtering reasons
-    filter_reasons = {
-        "dropped_avoid": 0,
-        "dropped_closed": 0,
-        "dropped_radius": 0,
-        "dropped_season": 0,
-        "dropped_theme": 0
-    }
-
-    out = []
+    # Normalize field names to match expected schema
+    normalized_pois = []
     for poi in pois:
-        ptags = set(map(str.lower, poi.get("tags", [])))
-        pthemes = set(map(str.lower, poi.get("themes", [])))
-
-        # avoid list
-        if avoid & ptags:
-            filter_reasons["dropped_avoid"] += 1
-            continue
-            
-        # theme overlap (if themes given)
-        if themes and themes.isdisjoint(pthemes):
-            filter_reasons["dropped_theme"] += 1
-            continue
-            
-        # availability
-        if not _in_season(poi, date_str):
-            filter_reasons["dropped_season"] += 1
-            continue
-            
-        if not _is_open(poi, date_str, day_start, day_end):
-            filter_reasons["dropped_closed"] += 1
-            continue
-            
-        # radius check
-        if base_place_id and not _within_radius(poi, base_place_id, pois, pace):
-            filter_reasons["dropped_radius"] += 1
-            continue
-
-        out.append(poi)
+        normalized = {
+            "poi_id": poi["poi_id"],
+            "place_id": poi["place_id"],
+            "name": poi.get("name", poi.get("title", "")),
+            "title": poi.get("name", poi.get("title", "")),
+            "tags": poi.get("tags", []),
+            "themes": poi.get("themes", []),
+            "price_band": poi.get("price_band", "low"),
+            "estimated_cost": poi.get("estimated_cost", 0),
+            "opening_hours": poi.get("opening_hours", {}),
+            "seasonality": poi.get("seasonality", []),
+            "duration_minutes": poi.get("duration_minutes", 60),
+            "safety_flags": poi.get("safety_flags", []),
+            "coords": poi.get("coords", {"lat": 0.0, "lng": 0.0}),
+            "region": poi.get("region", "Unknown"),
+            "last_verified": poi.get("last_verified", "2025-01-01T00:00:00Z")
+        }
+        normalized_pois.append(normalized)
     
-    duration = (datetime.now() - start_time).total_seconds()
-    logger.debug(f"Candidates filtering completed: {len(out)}/{len(pois)} POIs selected in {duration:.3f}s")
-    logger.debug(f"Filter reasons: {filter_reasons}")
+    return normalized_pois
+
+
+def resolve_base_coords(base_place_id: str) -> Tuple[float, float]:
+    """Return (lat,lng) for base place_id from dataset."""
+    pois = load_all_pois()
+    for poi in pois:
+        if poi["place_id"] == base_place_id:
+            coords = poi["coords"]
+            return coords["lat"], coords["lng"]
     
-    return out, filter_reasons
+    # Fallback to Colombo coordinates if not found
+    return 6.9271, 79.8612
+
+
+def haversine_km(a: Tuple[float, float], b: Tuple[float, float]) -> float:
+    """Calculate distance between two points using Haversine formula."""
+    lat1, lng1 = a
+    lat2, lng2 = b
+    
+    # Convert to radians
+    lat1, lng1, lat2, lng2 = map(radians, [lat1, lng1, lat2, lng2])
+    
+    # Haversine formula
+    dlat = lat2 - lat1
+    dlng = lng2 - lng1
+    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlng/2)**2
+    c = 2 * asin(sqrt(a))
+    
+    # Earth radius in kilometers
+    r = 6371
+    return c * r
+
+
+def window_by_region(pois: List[Dict[str, Any]], base: Tuple[float, float], radius_km: float) -> List[Dict[str, Any]]:
+    """Return POIs within radius_km of base."""
+    base_lat, base_lng = base
+    filtered = []
+    
+    for poi in pois:
+        coords = poi.get("coords", {})
+        poi_lat = coords.get("lat", 0.0)
+        poi_lng = coords.get("lng", 0.0)
+        
+        distance = haversine_km((base_lat, base_lng), (poi_lat, poi_lng))
+        if distance <= radius_km:
+            filtered.append(poi)
+    
+    return filtered
+
+
+def opening_alignment(poi: Dict[str, Any], day_slot: Dict[str, str]) -> float:
+    """
+    Return alignment score [0..1] of POI opening hours vs day window {start,end} (HH:MM).
+    Simple overlap ratio across the day window; 0 if no overlap.
+    """
+    opening_hours = poi.get("opening_hours", {})
+    if not opening_hours:
+        return 0.5  # Neutral score if no opening hours data
+    
+    day_start = day_slot.get("start", "08:00")
+    day_end = day_slot.get("end", "20:00")
+    
+    # Convert time strings to minutes since midnight
+    def time_to_minutes(time_str: str) -> int:
+        try:
+            hour, minute = map(int, time_str.split(":"))
+            return hour * 60 + minute
+        except:
+            return 0
+    
+    day_start_min = time_to_minutes(day_start)
+    day_end_min = time_to_minutes(day_end)
+    
+    # Check each day of the week for overlap
+    max_overlap = 0.0
+    for day_name in ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]:
+        day_hours = opening_hours.get(day_name, [])
+        if not day_hours:
+            continue
+        
+        for period in day_hours:
+            open_time = period.get("open", "00:00")
+            close_time = period.get("close", "23:59")
+            
+            open_min = time_to_minutes(open_time)
+            close_min = time_to_minutes(close_time)
+            
+            # Calculate overlap
+            overlap_start = max(day_start_min, open_min)
+            overlap_end = min(day_end_min, close_min)
+            
+            if overlap_start < overlap_end:
+                overlap_duration = overlap_end - overlap_start
+                day_duration = day_end_min - day_start_min
+                overlap_ratio = overlap_duration / day_duration if day_duration > 0 else 0
+                max_overlap = max(max_overlap, overlap_ratio)
+    
+    return max_overlap
+
+
+def annotate_runtime_fields(pois: List[Dict[str, Any]], base: Tuple[float, float], day_slot: Dict[str, str]) -> None:
+    """Annotate each candidate with 'opening_align' (float) and 'distance_km' (float)."""
+    base_lat, base_lng = base
+    
+    for poi in pois:
+        # Calculate distance
+        coords = poi.get("coords", {})
+        poi_lat = coords.get("lat", 0.0)
+        poi_lng = coords.get("lng", 0.0)
+        distance = haversine_km((base_lat, base_lng), (poi_lat, poi_lng))
+        poi["distance_km"] = distance
+        
+        # Calculate opening alignment
+        alignment = opening_alignment(poi, day_slot)
+        poi["opening_align"] = alignment
+
+
+def prefilter_by_themes_tags(pois: List[Dict[str, Any]], preferences: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Quick keep if overlap with preferences.themes/activity_tags; keep leniently for MVP."""
+    themes = set(preferences.get("themes", []))
+    activity_tags = set(preferences.get("activity_tags", []))
+    
+    if not themes and not activity_tags:
+        return pois  # No preferences, keep all
+    
+    filtered = []
+    for poi in pois:
+        poi_themes = set(poi.get("themes", []))
+        poi_tags = set(poi.get("tags", []))
+        
+        # Check for any overlap
+        theme_overlap = bool(themes & poi_themes)
+        tag_overlap = bool(activity_tags & poi_tags)
+        
+        if theme_overlap or tag_overlap:
+            filtered.append(poi)
+    
+    return filtered
+
+
+def generate_candidates(trip_context: Dict[str, Any], preferences: Dict[str, Any], constraints: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
+    """
+    Steps:
+      1) Load POIs
+      2) Region window around base_place_id (default radius 30–60 km; env or constant)
+      3) Prefilter by theme/tag overlap
+      4) Annotate opening_align + distance_km
+      5) Apply rules.filter_candidates(...) (returns kept, drop_log)
+      6) Deterministic sort keepers by:
+         (PRICE_ORDER[price_band], -opening_align, -theme_overlap, name/title, poi_id)
+    """
+    from .rules import filter_candidates
+    
+    # Step 1: Load POIs
+    all_pois = load_all_pois()
+    
+    # Step 2: Region window
+    base_place_id = trip_context.get("base_place_id")
+    base_coords = resolve_base_coords(base_place_id)
+    radius_km = constraints.get("radius_km", DEFAULT_RADIUS_KM)
+    regional_pois = window_by_region(all_pois, base_coords, radius_km)
+    
+    # Step 3: Prefilter by themes/tags
+    day_template = trip_context.get("day_template", {})
+    themed_pois = prefilter_by_themes_tags(regional_pois, preferences)
+    
+    # Step 4: Annotate runtime fields
+    annotate_runtime_fields(themed_pois, base_coords, day_template)
+    
+    # Step 5: Apply hard filters
+    kept, drop_log = filter_candidates(themed_pois, trip_context, preferences, constraints)
+    
+    # Step 6: Deterministic sort
+    def sort_key(poi):
+        price_band = poi.get("price_band", "low")
+        price_order = PRICE_ORDER.get(price_band, 1)
+        opening_align = poi.get("opening_align", 0.0)
+        
+        # Calculate theme overlap score
+        themes = set(preferences.get("themes", []))
+        activity_tags = set(preferences.get("activity_tags", []))
+        poi_themes = set(poi.get("themes", []))
+        poi_tags = set(poi.get("tags", []))
+        
+        theme_overlap = len(themes & poi_themes) + len(activity_tags & poi_tags)
+        
+        name = poi.get("name", poi.get("title", ""))
+        poi_id = poi.get("poi_id", "")
+        
+        return (price_order, -opening_align, -theme_overlap, name, poi_id)
+    
+    kept.sort(key=sort_key)
+    
+    return kept, drop_log

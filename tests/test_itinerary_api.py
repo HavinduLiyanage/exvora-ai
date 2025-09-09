@@ -408,7 +408,7 @@ def test_currency_conversion():
     
     # Check that totals are computed (currency conversion should work)
     assert "totals" in data
-    assert data["totals"]["total_cost"] is not None
+    assert data["totals"]["trip_cost_est"] is not None
 
 
 def test_structured_error_format():

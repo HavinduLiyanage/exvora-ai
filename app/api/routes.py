@@ -4,16 +4,17 @@ from app.schemas.models import (
     NLPPlanRequest, NLPPlanResponse, ShareRequest, ShareResponse, ShareGetResponse
 )
 from app.dataset.loader import load_pois, pois
-from app.engine.candidates import basic_candidates
-from app.engine.rules import apply_hard_rules
+# from app.engine.candidates import basic_candidates  # Replaced with generate_candidates
+# from app.engine.rules import apply_hard_rules  # Now integrated in generate_candidates
 from app.engine.rank import rank, collect_safety_warnings
-from app.engine.schedule import schedule_days
+# from app.engine.schedule import schedule_days  # Replaced with pack_day + routes_verify
 from app.config import get_settings
 from app.api.errors import raise_http_error
 from app.logs import log_json, log_summary
 from app.common.logging import timed
 from app.engine.feedback import repack_day_from_actions
-from app.engine.budget import optimize_day_budget
+from app.engine import BudgetOptimizer
+from app.engine.reranker import rerank_candidates_with_metadata
 from app.nlp.parse import parse_prompt_to_plan
 from app.share.store import create_share_token, get_share_data
 from app.utils.currency import get_currency_from_request, convert_currency
@@ -114,60 +115,127 @@ def build_itinerary(req: ItineraryRequest, request: Request, _: None = Depends(_
     pace = req.trip_context.day_template.pace
     prefs = req.preferences.model_dump()
     
-    # Stage 1: Candidates
+    # Stage 1: Candidates + Rules (integrated)
     with timed("candidates"):
-        cands, filter_reasons = basic_candidates(
-            pois(), prefs, date_str=dates[0], day_window=(day_start, day_end),
-            base_place_id=req.trip_context.base_place_id, pace=pace
+        from app.engine.candidates import generate_candidates
+        cands, drop_log = generate_candidates(
+            req.trip_context.model_dump(), 
+            prefs, 
+            req.constraints.model_dump() if req.constraints else {}
         )
     candidates_time = 0
+    
+    # Count drop reasons for logging
+    drop_reasons = {}
+    for drop in drop_log:
+        reason = drop["reason"]
+        if reason.startswith("avoid_tag:"):
+            drop_reasons["dropped_avoid"] = drop_reasons.get("dropped_avoid", 0) + 1
+        elif reason == "closed":
+            drop_reasons["dropped_closed"] = drop_reasons.get("dropped_closed", 0) + 1
+        elif reason == "bad_season":
+            drop_reasons["dropped_season"] = drop_reasons.get("dropped_season", 0) + 1
+        elif reason == "precheck_transfer_exceeds":
+            drop_reasons["dropped_transfer"] = drop_reasons.get("dropped_transfer", 0) + 1
+        elif reason == "safety_gate":
+            drop_reasons["dropped_safety"] = drop_reasons.get("dropped_safety", 0) + 1
+    
     log_json(request_id, "candidates", 
              ms=round(candidates_time * 1000, 1),
              kept_candidates=len(cands),
-             dropped_avoid=filter_reasons.get('dropped_avoid', 0),
-             dropped_closed=filter_reasons.get('dropped_closed', 0),
-             dropped_radius=filter_reasons.get('dropped_radius', 0))
-    
-    # Stage 2: Rules
-    with timed("rules"):
-        cands, rules_filter_reasons = apply_hard_rules(cands, req.constraints.model_dump() if req.constraints else {}, req.locks)
-    rules_time = 0
-    log_json(request_id, "rules", 
-             ms=round(rules_time * 1000, 1),
-             kept_candidates=len(cands),
-             dropped_budget=rules_filter_reasons.get('dropped_budget', 0),
-             dropped_transfer=rules_filter_reasons.get('dropped_transfer', 0),
-             dropped_locks=rules_filter_reasons.get('dropped_locks', 0))
+             dropped_avoid=drop_reasons.get('dropped_avoid', 0),
+             dropped_closed=drop_reasons.get('dropped_closed', 0),
+             dropped_season=drop_reasons.get('dropped_season', 0),
+             dropped_transfer=drop_reasons.get('dropped_transfer', 0),
+             dropped_safety=drop_reasons.get('dropped_safety', 0))
     
     # Stage 3: Ranking
     with timed("rank"):
-        ranked, ranking_metrics = rank(cands, (req.constraints.daily_budget_cap if req.constraints else None), prefs, day_start, day_end, pace)
+        ranked, ranking_metrics = rank(cands, (req.constraints.daily_budget_cap if req.constraints else None), prefs, day_start, day_end, pace, context=req.trip_context.model_dump())
     rank_time = 0
     log_json(request_id, "rank", 
              ms=round(rank_time * 1000, 1),
              kept_candidates=len(ranked),
              model_version=ranking_metrics.get('model_version', 'unknown'))
     
+    # Stage 3.5: Reranking (if audit_log provided)
+    if req.audit_log and req.audit_log.feedback_events:
+        with timed("rerank"):
+            # Add scores to candidates for reranking
+            candidates_with_scores = []
+            for i, candidate in enumerate(ranked):
+                candidate_with_score = dict(candidate)
+                candidate_with_score["score"] = 1.0 - (i / max(len(ranked) - 1, 1))  # Simple score based on rank
+                candidates_with_scores.append(candidate_with_score)
+            
+            # Apply reranking
+            reranked_candidates, rerank_metadata = rerank_candidates_with_metadata(
+                candidates_with_scores, req.audit_log.model_dump()
+            )
+            
+            # Extract reranked candidates (without scores for scheduling)
+            ranked = [c for c in reranked_candidates if "score" in c]
+            
+            log_json(request_id, "rerank",
+                     ms=0,  # Placeholder timing
+                     rerank_applied=rerank_metadata.get("rerank_applied", False),
+                     n_candidates_with_reasons=rerank_metadata.get("n_candidates_with_reasons", 0))
+    else:
+        rerank_metadata = {"rerank_applied": False}
+    
     # Stage 4: Scheduling
     start_time = time.time()
     try:
         with timed("schedule"):
-            days = schedule_days(
-                dates, ranked, (req.constraints.daily_budget_cap if req.constraints else None),
-                day_start=day_start, day_end=day_end, locks=req.locks, pace=pace
-            )
+            from app.engine.schedule import pack_day
+            from app.engine.transfers import routes_verify
+            
+            days = []
+            for date in dates:
+                # Pack the day with activities and transfer placeholders
+                day_template = {
+                    "start": day_start,
+                    "end": day_end,
+                    "pace": pace
+                }
+                items = pack_day(ranked, day_template, locks=req.locks)
+                
+                # Verify transfer times with Google Routes (or heuristic fallback)
+                routes_verify(items, mode="DRIVE")
+                
+                # Calculate day summary
+                total_cost = sum(item.get("estimated_cost", 0) for item in items if item.get("type") == "activity")
+                total_walking = sum(item.get("distance_km", 0) or 0 for item in items if item.get("type") == "transfer")
+                
+                day_plan = {
+                    "date": date,
+                    "summary": {
+                        "title": f"Day {len(days) + 1}",
+                        "est_cost": total_cost,
+                        "walking_km": total_walking,
+                        "health_load": pace
+                    },
+                    "items": items,
+                    "notes": []
+                }
+                days.append(day_plan)
             
             # Stage 5: Budget optimization
             with timed("budget_optimize"):
-                optimized_days = []
-                for day in days:
-                    optimized_day, budget_notes = optimize_day_budget(
-                        day, ranked, req.constraints.daily_budget_cap if req.constraints else None
-                    )
-                    if budget_notes:
-                        optimized_day["notes"] = (optimized_day.get("notes", []) + budget_notes)
-                    optimized_days.append(optimized_day)
-                days = optimized_days
+                # Create candidates_by_date dict for budget optimizer
+                candidates_by_date = {date: ranked for date in dates}
+                
+                # Apply comprehensive budget optimization
+                optimizer = BudgetOptimizer(enable_cross_day_rebalance=False)
+                budget_result = optimizer.optimize_trip(
+                    days=days,
+                    trip_context=req.trip_context.model_dump(),
+                    preferences=req.preferences.model_dump(),
+                    constraints=req.constraints.model_dump() if req.constraints else {},
+                    candidates_by_date=candidates_by_date
+                )
+                days = budget_result["days"]
+                budget_totals = budget_result["totals"]
     except Exception as e:
         # Only escalate as 424 when Google route verification is explicitly enabled
         if settings.USE_GOOGLE_ROUTES:
@@ -203,14 +271,19 @@ def build_itinerary(req: ItineraryRequest, request: Request, _: None = Depends(_
                 [f"Reduce activities or increase MAX_ITEMS_PER_DAY limit"]
             )
     
-    # Calculate totals
-    trip_cost_est = sum(day["summary"].get("est_cost", 0) for day in days)
-    trip_transfer_minutes = sum(
-        item.get("duration_minutes", 0) 
-        for day in days 
-        for item in day["items"] 
-        if item.get("type") == "transfer"
-    )
+    # Calculate totals using budget optimizer results
+    if 'budget_totals' in locals():
+        trip_cost_est = budget_totals["trip_cost_est"]
+        trip_transfer_minutes = budget_totals["trip_transfer_minutes"]
+    else:
+        # Fallback calculation if budget optimizer wasn't used
+        trip_cost_est = sum(day["summary"].get("est_cost", 0) for day in days)
+        trip_transfer_minutes = sum(
+            item.get("duration_minutes", 0) 
+            for day in days 
+            for item in day["items"] 
+            if item.get("type") == "transfer"
+        )
     
     # Currency conversion
     request_currency = get_currency_from_request(prefs, req.constraints.model_dump() if req.constraints else None)
@@ -236,19 +309,24 @@ def build_itinerary(req: ItineraryRequest, request: Request, _: None = Depends(_
                 day["notes"] = []
             day["notes"].extend(day_warnings)
     
+    # Prepare totals with budget optimizer format
+    if 'budget_totals' in locals():
+        totals = {
+            "trip_cost_est": converted_cost,
+            "trip_transfer_minutes": trip_transfer_minutes,
+            "daily": budget_totals["daily"]
+        }
+    else:
+        totals = {
+            "trip_cost_est": converted_cost,
+            "trip_transfer_minutes": trip_transfer_minutes,
+            "daily": [{"date": day["date"], "est_cost": day["summary"].get("est_cost", 0)} for day in days]
+        }
+    
     resp = {
         "currency": final_currency,
         "days": [DayPlan(**day).model_dump() for day in days],
-        "totals": {
-            "total_cost": converted_cost,
-            "total_walking_km": 0.0,  # Placeholder for now
-            "total_duration_hours": sum(
-                item.get("duration_minutes", 0) 
-                for day in days 
-                for item in day["items"] 
-                if item.get("type") not in ["transfer", "break"]
-            ) / 60.0  # Convert minutes to hours
-        },
+        "totals": totals,
         "notes": notes if notes else None
     }
     

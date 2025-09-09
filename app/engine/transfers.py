@@ -1,243 +1,160 @@
+"""
+Transfer verification with Google Routes API and heuristic fallback.
+"""
+
 from __future__ import annotations
-from typing import Optional, Tuple, Dict, List, Any
-import time, math, random
-from app.config import get_settings
-from datetime import datetime
-import logging
+from typing import List, Dict, Any, Tuple
+import os
+from math import radians, sin, cos, asin, sqrt
 
-_settings = get_settings()
-logger = logging.getLogger(__name__)
 
-# ------------------
-# Simple in-process TTL cache
-# key: (from_id, to_id, mode, time_bucket)
-# ------------------
-_CACHE: Dict[tuple, tuple] = {}  # key -> (expires_at, duration_min, distance_km, source, verify_failed)
+def _env_int(name: str, default: int) -> int:
+    """Get environment variable as integer with default."""
+    try:
+        return int(os.getenv(name, default))
+    except:
+        return default
 
-def _now() -> float:
-    return time.time()
 
-def _bucket_minutes(hhmm: str, bucket: int = 15) -> int:
-    h, m = map(int, hhmm.split(":"))
-    total = h * 60 + m
-    return (total // bucket) * bucket
+MAX_EDGES = _env_int("TRANSFER_VERIFY_MAX_EDGES", 30)
 
-def _cache_get(key: tuple) -> Optional[tuple]:
-    v = _CACHE.get(key)
-    if not v: return None
-    expires, dur, dist, source, verify_failed = v
-    if _now() > expires:
-        _CACHE.pop(key, None)
-        return None
-    return dur, dist, source, verify_failed
 
-def _cache_set(key: tuple, dur: int, dist: float, source: str, verify_failed: int = 0):
-    ttl = int(_settings.TRANSFER_CACHE_TTL_SECONDS or 600)
-    _CACHE[key] = (_now() + ttl, dur, dist, source, verify_failed)
-
-# ------------------
-# Heuristic fallback
-# ------------------
-def _heuristic_eta(from_place_id: str, to_place_id: str, mode: str) -> tuple[int, float, str]:
-    # Very rough: vary to avoid identical outputs
-    if mode.upper() == "WALK":
-        minutes = random.randint(8, 22)
-        km = round(minutes * 0.07, 2)  # ~4-5 km/h walking
-    else:
-        minutes = random.randint(10, 28)
-        km = round(minutes * 0.25, 2)  # ~15 km/h avg urban w/ stops
-    return minutes, km, "heuristic"
-
-# ------------------
-# Google client (lazy)
-# ------------------
-_gmaps = None
-def _gmaps():
-    global _gmaps
-    if _gmaps is None:
-        import googlemaps
-        if not _settings.GOOGLE_MAPS_API_KEY:
-            raise RuntimeError("GOOGLE_MAPS_API_KEY not set")
-        _gmaps = googlemaps.Client(key=_settings.GOOGLE_MAPS_API_KEY)
-    return _gmaps
-
-def _google_eta(from_place_id: str, to_place_id: str, mode: str, depart_time_str: str) -> tuple[int, float, str]:
-    # Use Distance Matrix: place_id:prefix
-    g = _gmaps()
-    origins = [f"place_id:{from_place_id}"]
-    destinations = [f"place_id:{to_place_id}"]
-    mode_l = mode.lower()
-    # We don't set departure_time when walking; for driving, use 'now'
-    depart = "now" if mode_l in ("drive", "driving") else None
-    resp = g.distance_matrix(
-        origins=origins,
-        destinations=destinations,
-        mode="driving" if mode_l in ("drive","driving") else "walking",
-        departure_time=depart,
-    )
-    rows = resp.get("rows", [])
-    if not rows or not rows[0].get("elements"):
-        raise RuntimeError("No elements in Google response")
-    el = rows[0]["elements"][0]
-    if el.get("status") != "OK":
-        raise RuntimeError(f"Google element status {el.get('status')}")
-    dur_sec = el["duration"]["value"]
-    meters = el["distance"]["value"]
-    dur_min = max(1, int(math.ceil(dur_sec / 60)))
-    km = round(meters / 1000.0, 2)
-    return dur_min, km, "google_routes_live"
-
-# ------------------
-# Public API
-# ------------------
-# call_count limiter (per-process, reset heuristically each request by caller if needed)
-_calls_this_request = 0
-
-def reset_transfer_call_counter():
-    global _calls_this_request
-    _calls_this_request = 0
-
-def verify(from_place_id: str, to_place_id: str, mode: str, depart_time: str) -> dict:
-    """
-    Returns: {"duration_minutes": int, "distance_km": float, "source": "google_routes_live"|"heuristic", "verify_failed": int}
-    May raise RuntimeError if USE_GOOGLE_ROUTES=true and Google call hard-fails; caller should map to 424.
-    """
-    start_time = datetime.now()
+def haversine_km(a: Tuple[float, float], b: Tuple[float, float]) -> float:
+    """Calculate distance between two points using Haversine formula."""
+    lat1, lng1 = a
+    lat2, lng2 = b
     
-    global _calls_this_request
-    mode = (mode or "DRIVE").upper()
-    depart_bucket = _bucket_minutes(depart_time or "09:00", 15)
-    key = (from_place_id, to_place_id, mode, depart_bucket)
-
-    # cache
-    cached = _cache_get(key)
-    if cached:
-        dur, dist, src, verify_failed = cached
-        duration = (datetime.now() - start_time).total_seconds()
-        logger.debug(f"Transfer verification (cached): {from_place_id} -> {to_place_id} in {duration:.3f}s")
-        return {"duration_minutes": dur, "distance_km": dist, "source": src, "verify_failed": verify_failed}
-
-    # choose backend
-    if _settings.USE_GOOGLE_ROUTES:
-        limit = int(_settings.GOOGLE_PER_REQUEST_MAX_CALLS or 30)
-        if _calls_this_request >= limit:
-            # fail "softly": fall back to heuristic
-            dur, dist, src = _heuristic_eta(from_place_id, to_place_id, mode)
-            _cache_set(key, dur, dist, src, 1)  # verify_failed=1 for rate limit
-            duration = (datetime.now() - start_time).total_seconds()
-            logger.debug(f"Transfer verification (heuristic fallback - rate limit): {from_place_id} -> {to_place_id} in {duration:.3f}s")
-            return {"duration_minutes": dur, "distance_km": dist, "source": src, "verify_failed": 1}
-        try:
-            dur, dist, src = _google_eta(from_place_id, to_place_id, mode, depart_time)
-            _calls_this_request += 1
-            _cache_set(key, dur, dist, src, 0)  # verify_failed=0 for success
-            duration = (datetime.now() - start_time).total_seconds()
-            logger.debug(f"Transfer verification (Google): {from_place_id} -> {to_place_id} in {duration:.3f}s")
-            return {"duration_minutes": dur, "distance_km": dist, "source": src, "verify_failed": 0}
-        except Exception as e:
-            # Fall back to heuristic and record failure
-            dur, dist, src = _heuristic_eta(from_place_id, to_place_id, mode)
-            _cache_set(key, dur, dist, src, 1)  # verify_failed=1 for Google failure
-            duration = (datetime.now() - start_time).total_seconds()
-            logger.warning(f"Transfer verification (Google failed, heuristic fallback): {from_place_id} -> {to_place_id} in {duration:.3f}s, error: {e}")
-            return {"duration_minutes": dur, "distance_km": dist, "source": src, "verify_failed": 1}
-    # fallback path
-    dur, dist, src = _heuristic_eta(from_place_id, to_place_id, mode)
-    _cache_set(key, dur, dist, src, 0)  # verify_failed=0 for heuristic
+    # Convert to radians
+    lat1, lng1, lat2, lng2 = map(radians, [lat1, lng1, lat2, lng2])
     
-    duration = (datetime.now() - start_time).total_seconds()
-    logger.debug(f"Transfer verification (heuristic): {from_place_id} -> {to_place_id} in {duration:.3f}s")
+    # Haversine formula
+    dlat = lat2 - lat1
+    dlng = lng2 - lng1
+    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlng/2)**2
+    c = 2 * asin(sqrt(a))
     
-    return {"duration_minutes": dur, "distance_km": dist, "source": src, "verify_failed": 0}
+    # Earth radius in kilometers
+    r = 6371
+    return c * r
 
-def verify_sequence(sequence: List[Dict[str, Any]], mode: str = "DRIVE") -> List[Dict[str, Any]]:
+
+def estimate_heuristic(a_lat: float, a_lng: float, b_lat: float, b_lng: float, mode: str) -> Tuple[int, float]:
     """
-    Verify a sequence of transfers between POIs.
-    Only verifies when USE_GOOGLE_ROUTES=true.
-    Returns the sequence with verified transfer times and distances.
+    Return (duration_minutes, distance_km) using haversine and mode speed:
+    DRIVE ~ 40 km/h, WALK ~ 4.5 km/h. Clamp min 3 minutes.
     """
-    if not _settings.USE_GOOGLE_ROUTES:
-        # Skip verification, return sequence as-is
-        return sequence
+    distance_km = haversine_km((a_lat, a_lng), (b_lat, b_lng))
     
-    verified_sequence = []
-    for i, item in enumerate(sequence):
-        if i == 0:
-            verified_sequence.append(item)
-            continue
-            
-        # Add transfer from previous item to current item
-        prev_item = verified_sequence[-1]
-        transfer = verify(
-            prev_item["place_id"], 
-            item["place_id"], 
-            mode, 
-            prev_item.get("end", "09:00")
+    # Speed estimates (km/h)
+    speeds = {
+        "DRIVE": 40.0,
+        "WALK": 4.5,
+        "BIKE": 15.0,
+        "TRANSIT": 25.0
+    }
+    
+    speed = speeds.get(mode.upper(), 20.0)  # Default speed
+    duration_hours = distance_km / speed
+    duration_minutes = max(3, int(duration_hours * 60))  # Minimum 3 minutes
+    
+    return duration_minutes, distance_km
+
+
+def _extract_edges(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return list of {'idx': i, 'from_place_id', 'to_place_id', 'mode'} for transfer items in items order."""
+    edges = []
+    
+    for i, item in enumerate(items):
+        if item.get("type") == "transfer":
+            edge = {
+                "idx": i,
+                "from_place_id": item.get("from_place_id"),
+                "to_place_id": item.get("to_place_id"),
+                "mode": item.get("mode", "DRIVE")
+            }
+            edges.append(edge)
+    
+    return edges
+
+
+def _call_google_routes(edges: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Real call: batch or sequential requests to Google Routes/Distance Matrix using place IDs.
+    Return [{'minutes': int, 'km': float}] aligned with edges.
+    Raise on HTTP/timeouts so caller can fallback.
+    """
+    import googlemaps
+    
+    api_key = os.getenv("GOOGLE_MAPS_API_KEY")
+    if not api_key:
+        raise ValueError("GOOGLE_MAPS_API_KEY not set")
+    
+    client = googlemaps.Client(key=api_key)
+    
+    # Extract place IDs
+    origins = [edge["from_place_id"] for edge in edges]
+    destinations = [edge["to_place_id"] for edge in edges]
+    
+    try:
+        # Use Distance Matrix API
+        result = client.distance_matrix(
+            origins=origins,
+            destinations=destinations,
+            mode="driving",  # Default to driving
+            units="metric"
         )
         
-        # Insert transfer before current item
-        verified_sequence.append({
-            "type": "transfer",
-            "from_place_id": prev_item["place_id"],
-            "to_place_id": item["place_id"],
-            "mode": mode,
-            **transfer
-        })
+        results = []
+        for i, edge in enumerate(edges):
+            element = result["rows"][i]["elements"][i]
+            
+            if element["status"] == "OK":
+                duration_seconds = element["duration"]["value"]
+                distance_meters = element["distance"]["value"]
+                
+                duration_minutes = max(3, int(duration_seconds / 60))  # Minimum 3 minutes
+                distance_km = distance_meters / 1000.0
+                
+                results.append({
+                    "minutes": duration_minutes,
+                    "km": distance_km
+                })
+            else:
+                # Fallback to heuristic if Google fails for this edge
+                raise ValueError(f"Google API failed for edge {i}: {element['status']}")
         
-        verified_sequence.append(item)
+        return results
+        
+    except Exception as e:
+        # Any error should trigger fallback
+        raise RuntimeError(f"Google Routes API error: {str(e)}")
+
+
+def routes_verify(items: List[Dict[str, Any]], mode: str = "DRIVE") -> List[Dict[str, Any]]:
+    """
+    Verify at most MAX_EDGES edges. For each edge:
+      - Try Google; set source 'google_routes_live' on success
+      - On any failure, set heuristic values and source 'heuristic'
+    Update items in place; return list of transfer items updated.
+    """
+    edges = _extract_edges(items)[:MAX_EDGES]
+    if not edges:
+        return []
     
-    return verified_sequence
-
-
-def reinsert_changed_transfers(
-    before: List[Dict[str, Any]],
-    after_activities: List[Dict[str, Any]],
-    mode: str = "DRIVE",
-) -> List[Dict[str, Any]]:
-    """
-    Merge transfers by reusing prior legs if unchanged, else estimate fresh.
-    Assumes `after_activities` are chronological Activity items (no transfers).
-    """
-    # Build a map of prior transfer legs: (from,to) -> transfer dict
-    prev_transfers: Dict[Tuple[str, str], Dict[str, Any]] = {}
-    prev_pairs: List[Tuple[str, str]] = []
-    prev_acts = [i for i in before if i.get("type") != "transfer"]
-    for i in range(1, len(before)):
-        a = before[i - 1]
-        b = before[i]
-        if a.get("type") != "transfer" and b.get("type") == "transfer":
-            # next after transfer is activity, capture on following step
-            continue
-    # Simpler: derive from consecutive activities in `before`
-    for i in range(1, len(prev_acts)):
-        frm = prev_acts[i - 1].get("place_id")
-        to = prev_acts[i].get("place_id")
-        # find transfer item between these two in before
-        # scan window around their positions
-        for j in range(len(before)):
-            it = before[j]
-            if it.get("type") == "transfer" and it.get("from_place_id") == frm and it.get("to_place_id") == to:
-                prev_transfers[(frm, to)] = it
-                prev_pairs.append((frm, to))
-                break
-
-    out: List[Dict[str, Any]] = []
-    for idx, act in enumerate(after_activities):
-        out.append(act)
-        if idx == len(after_activities) - 1:
-            break
-        frm = act.get("place_id")
-        to = after_activities[idx + 1].get("place_id")
-        reused = prev_transfers.get((frm, to))
-        if reused:
-            out.append({**reused})
-        else:
-            tr = verify(frm, to, mode, act.get("end", "09:00"))
-            out.append({
-                "type": "transfer",
-                "from_place_id": frm,
-                "to_place_id": to,
-                "mode": mode,
-                **tr,
-            })
-    return out
+    try:
+        results = _call_google_routes(edges)
+        for e, r in zip(edges, results):
+            t = items[e["idx"]]
+            t["duration_minutes"] = int(r["minutes"])
+            t["distance_km"] = float(r["km"])
+            t["source"] = "google_routes_live"
+    except Exception:
+        # Fill all target edges heuristically
+        for e in edges:
+            t = items[e["idx"]]
+            # Use safe defaults when coordinates aren't available
+            t["duration_minutes"] = 12  # 12 minutes default
+            t["distance_km"] = 3.5  # 3.5 km default
+            t["source"] = "heuristic"
+    
+    return [it for it in items if it.get("type") == "transfer"]

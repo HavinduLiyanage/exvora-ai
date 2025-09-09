@@ -1,4 +1,4 @@
-from typing import List, Optional, Union, Literal, Annotated
+from typing import List, Optional, Union, Literal, Annotated, Dict, Any
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 from datetime import datetime, date, time
 
@@ -110,12 +110,24 @@ class Lock(BaseModel):
     })
 
 
+# Audit Log Models
+class FeedbackEvent(BaseModel):
+    poi_id: Optional[str] = None
+    rating: int = Field(..., ge=1, le=5)
+    tags: List[str] = Field(default_factory=list)
+    comment: Optional[str] = None
+    ts: Optional[str] = None
+
+class AuditLog(BaseModel):
+    feedback_events: List[FeedbackEvent] = Field(default_factory=list)
+
 # Request Models
 class ItineraryRequest(BaseModel):
     trip_context: TripContext
     preferences: Preferences
     constraints: Optional[Constraints] = None
     locks: List[Lock] = []
+    audit_log: Optional[AuditLog] = None
     
     model_config = ConfigDict(json_schema_extra={
         "example": {
@@ -146,8 +158,8 @@ class Transfer(BaseModel):
     from_place_id: str
     to_place_id: str
     mode: str
-    duration_minutes: int
-    distance_km: float
+    duration_minutes: Optional[int] = None
+    distance_km: Optional[float] = None
     source: Literal["heuristic","google_routes_live"]
 
 
@@ -166,9 +178,9 @@ class DayPlan(BaseModel):
 
 
 class Totals(BaseModel):
-    total_cost: Optional[float] = None
-    total_walking_km: Optional[float] = None
-    total_duration_hours: Optional[float] = None
+    trip_cost_est: Optional[float] = None
+    trip_transfer_minutes: Optional[int] = None
+    daily: Optional[List[Dict[str, Any]]] = None
 
 
 class ItineraryResponse(BaseModel):
@@ -210,7 +222,10 @@ class ItineraryResponse(BaseModel):
             ],
             "totals": {
                 "trip_cost_est": 85.0,
-                "trip_transfer_minutes": 15
+                "trip_transfer_minutes": 15,
+                "daily": [
+                    {"date": "2025-09-10", "est_cost": 85.0}
+                ]
             }
         }
     })
@@ -240,6 +255,7 @@ class FeedbackRequest(BaseModel):
     locks: List[Lock] = []
     current_day_plan: CurrentDayPlan
     actions: List[FeedbackAction]
+    audit_log: Optional[AuditLog] = None
 
 
 class FeedbackResponse(BaseModel):
