@@ -50,16 +50,21 @@ def init_model(model_path: str = "saved_model", ann_backend: Optional[str] = Non
     global _model
     logger.info("Initializing reranker model...")
     _model = SemanticStarModel(model_name=model_name, alpha=alpha, decay_rate=decay_rate, ann_backend=ann_backend)
-    if os.path.exists(model_path):
-        _model.load_model(model_path)
-        logger.info(f"Loaded saved model from {model_path} (profiles={len(_model.semantic_affinities)})")
+    meta_file = os.path.join(model_path, 'metadata.json')
+    emb_file = os.path.join(model_path, 'embeddings.npy')
+    if os.path.exists(meta_file) and os.path.exists(emb_file):
         try:
-            _model.build_ann_index(backend=ann_backend)
-            logger.info("Built ANN index for reranker")
+            _model.load_model(model_path)
+            logger.info(f"Loaded saved model from {model_path} (profiles={len(_model.semantic_affinities)})")
+            try:
+                _model.build_ann_index(backend=ann_backend)
+                logger.info("Built ANN index for reranker")
+            except Exception as e:
+                logger.warning(f"Failed to build ANN index: {e}")
         except Exception as e:
-            logger.warning(f"Failed to build ANN index: {e}")
+            logger.warning(f"Failed to load saved model from {model_path}: {e}. Starting fresh reranker.")
     else:
-        logger.warning(f"No saved model found at {model_path}; starting fresh reranker (no embeddings loaded)")
+        logger.warning(f"No valid saved model found at {model_path}; starting fresh reranker (no embeddings loaded)")
 
 def shutdown_model(save_path: str = "saved_model") -> None:
     """Save model state on shutdown (if loaded)."""
@@ -133,6 +138,8 @@ async def feedback_rerank(request: RerankRequest):
     """
     Process feedback_events and rerank provided candidates in one call.
     """
+    logger.info(f"[feedback_rerank] Entry: {len(request.candidates)} candidates, {len(request.feedback_events)} feedback events")
+
     try:
         feedback_dicts = [f.dict() for f in request.feedback_events] if request.feedback_events else []
         candidates_dicts = [c.dict() for c in request.candidates]
@@ -146,3 +153,10 @@ async def feedback_rerank(request: RerankRequest):
     except Exception as e:
         logger.exception("Unhandled error in reranker endpoint")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ----------------- Health check endpoint ---------------------
+@router.get("/ping")
+async def ping():
+    """Simple ping endpoint to verify router reachability."""
+    return {"status": "ok", "router": "ai_rerank"}
