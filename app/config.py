@@ -1,13 +1,13 @@
 from pydantic_settings import BaseSettings
 from pydantic import Field
 from functools import lru_cache
-
+from typing import Optional
 
 class Settings(BaseSettings):
-    PUBLIC_API_KEY: str | None = None
-    ADMIN_API_KEY: str | None = None
+    PUBLIC_API_KEY: Optional[str] = None
+    ADMIN_API_KEY: Optional[str] = None
+    GOOGLE_MAPS_API_KEY: Optional[str] = None
     USE_GOOGLE_ROUTES: bool = Field(default=False)
-    GOOGLE_MAPS_API_KEY: str | None = None
     TRANSFER_CACHE_TTL_SECONDS: int = 600   # 10 min
     TRANSFER_MAX_CALLS_PER_REQUEST: int = 30  # safety limit
     RATE_LIMIT_PER_MINUTE: int = 50  # max requests per minute per IP (increased for testing)

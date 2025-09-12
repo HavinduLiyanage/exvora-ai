@@ -1,14 +1,18 @@
+import os
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.exceptions import RequestValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 from app.api.routes import router
 from app.api.admin import router as admin_router
 from app.api.rerank import router as rerank_router
+from app.api.ai_rerank import router as ai_rerank_router
+
 from app.api.errors import error_response
 import uuid
 import time
 import logging
-
+# from app.api import rerank as rerank_module
+from app.api import ai_rerank as rerank_module
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -42,6 +46,7 @@ app.add_middleware(RequestIDMiddleware)
 app.include_router(router, prefix="/v1")
 app.include_router(admin_router)
 app.include_router(rerank_router, prefix="/v1")
+app.include_router(ai_rerank_router, prefix="/v1")
 
 
 @app.exception_handler(RequestValidationError)
@@ -63,3 +68,17 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         # Convert simple string to structured format
         error_data = error_response(exc.status_code, "http_error", str(exc.detail))
         return JSONResponse(status_code=exc.status_code, content=error_data)
+
+@app.on_event("startup")
+async def startup_tasks():
+    # configure model path and backend from env or defaults
+    model_path = os.environ.get("SAVED_MODEL_PATH", "saved_model")
+    ann_backend = os.environ.get("ANN_BACKEND", None)  # 'faiss' or 'hnsw' or None
+    rerank_module.init_model(model_path=model_path, ann_backend=ann_backend)
+    logger.info("Rerank module initialized during app startup")
+
+@app.on_event("shutdown")
+async def shutdown_tasks():
+    # ensure model saved on shutdown
+    rerank_module.shutdown_model(save_path=os.environ.get("SAVED_MODEL_PATH", "saved_model"))
+    logger.info("Rerank module shutdown complete")

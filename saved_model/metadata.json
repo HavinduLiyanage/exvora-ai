@@ -1,0 +1,54 @@
+{
+  "tag_affinities": {
+    "hiking": 0.24100689501895423,
+    "quiet": 0.24100689501895423,
+    "view": 0.24100689501895423,
+    "nightlife": -0.24100689501895423,
+    "crowded": -0.24100689501895423,
+    "loud": -0.24100689501895423,
+    "food": 0.1903985389889412,
+    "local": 0.1903985389889412,
+    "authentic": 0.1903985389889412
+  },
+  "semantic_meta": {
+    "93bf5eed37ef549cd3e3fb02c0f7320a6a6b5dba06db7305e2eb546d18a9fddf": {
+      "description": "Amazing scenic hike with breathtaking mountain views",
+      "weight": 0.9640275800758169,
+      "count": 1,
+      "last_seen": "2025-09-11T14:32:39.638074"
+    },
+    "1c4ccd3034e8ca4dda639d7dadb286048d04daf9488ebe22b23480216e20f689": {
+      "description": "Amazing views, not crowded",
+      "weight": 0.9640275800758169,
+      "count": 1,
+      "last_seen": "2025-09-11T14:32:39.653838"
+    },
+    "a5de159a2d8174f9cc0195f45fe5746636c6fdec685bd286aa54b20658586b7d": {
+      "description": "Busy nightlife district with bars and clubs",
+      "weight": -0.9640275800758169,
+      "count": 1,
+      "last_seen": "2025-09-11T14:32:39.669910"
+    },
+    "033983580664ead8cc137b7f756d126da68ded75509f998579ab546c8235aa12": {
+      "description": "Too noisy and crowded",
+      "weight": -0.9640275800758169,
+      "count": 1,
+      "last_seen": "2025-09-11T14:32:39.685072"
+    },
+    "eb4689c734fce0e262096415532f01367111c3a5293b38f3392b5a1a91c07a8b": {
+      "description": "Traditional local food market with authentic cuisine",
+      "weight": 0.7615941559557649,
+      "count": 1,
+      "last_seen": "2025-09-11T14:32:39.701629"
+    },
+    "2b467546de0c01ef4df8f9f34c28e5d14a96d899d996d075fcaee0770d8bd191": {
+      "description": "Great authentic food, friendly vendors",
+      "weight": 0.7615941559557649,
+      "count": 1,
+      "last_seen": "2025-09-11T14:32:39.718764"
+    }
+  },
+  "alpha": 0.25,
+  "decay_rate": 0.02,
+  "last_update": "2025-09-11T14:32:39.619091"
+}
