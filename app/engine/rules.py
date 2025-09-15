@@ -128,30 +128,42 @@ def is_open_for_day(poi: Dict[str, Any], day_slot: Dict[str, str]) -> bool:
     return False
 
 
-def precheck_transfer_exceeds(poi: Dict[str, Any], base_km: float, max_transfer_minutes: int, modes: List[str]) -> bool:
+def precheck_transfer_exceeds(
+    poi: Dict[str, Any],
+    base_km: float,
+    max_transfer_minutes: Optional[int],
+    modes: List[str]
+) -> bool:
     """
-    Heuristic ETA: DRIVE ~ 35-45km/h, WALK ~ 4-5km/h; if minimum across modes exceeds max_transfer_minutes → True.
+    Heuristic ETA: DRIVE ~ 35-45km/h, WALK ~ 4-5km/h.
+    If the minimum duration across modes exceeds max_transfer_minutes → True.
+    If max_transfer_minutes is None → treat as 'no constraint' → False.
     """
     if not modes:
         return False
-    
+
     # Speed estimates (km/h)
     speeds = {
         "DRIVE": 40.0,
         "WALK": 4.5,
         "BIKE": 15.0,
-        "TRANSIT": 25.0
+        "TRANSIT": 25.0,
     }
-    
-    min_duration_minutes = float('inf')
-    
+
+    min_duration_minutes = float("inf")
+
     for mode in modes:
-        speed = speeds.get(mode.upper(), 20.0)  # Default speed
-        duration_hours = base_km / speed
+        speed = speeds.get(mode.upper(), 20.0)  # default speed
+        duration_hours = base_km / speed if speed > 0 else float("inf")
         duration_minutes = duration_hours * 60
         min_duration_minutes = min(min_duration_minutes, duration_minutes)
-    
-    return min_duration_minutes > max_transfer_minutes
+
+    if max_transfer_minutes is None:
+        # No constraint → cannot exceed
+        return False
+
+    return min_duration_minutes > float(max_transfer_minutes)
+
 
 
 def safety_gate(poi: Dict[str, Any], health: Dict[str, Any]) -> bool:

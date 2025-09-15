@@ -1,29 +1,278 @@
 {
   "tag_affinities": {
-    "hiking": 0.4217620662831699,
-    "quiet": 0.4217620662831699
+    "hiking": 0.7846035633245793,
+    "quiet": 0.6450515502958388,
+    "culture": 0.6025109105265589,
+    "history": 0.38380579926066016,
+    "beach": 0.5193721777088219,
+    "romantic": 0.24100689501895423,
+    "scenic": 0.5799276722705576,
+    "food": 0.0,
+    "shopping": 0.1903985389889412,
+    "local": 0.1903985389889412,
+    "wildlife": 0.4217620662831699,
+    "adventure": 0.4217620662831699,
+    "relax": 0.33319744323064715,
+    "art": 0.0,
+    "music": 0.24100689501895423,
+    "nightlife": 0.24100689501895423,
+    "heritage": 0.3711537102531569,
+    "nature": 0.24100689501895423,
+    "religion": 0.24100689501895423,
+    "walking": 0.1903985389889412,
+    "surfing": 0.24100689501895423,
+    "tea": 0.1903985389889412,
+    "view": 0.24100689501895423
   },
   "semantic_meta": {
     "6222ad23ecde8a82578b9b7d1ba626958391592d4b99756b3244a184dc0c6c29": {
       "description": "Beautiful mountain hike",
-      "weight": 0.9640275800758169,
+      "weight": 0.9073350461467182,
       "count": 1,
       "last_seen": "2025-09-12T07:47:27.903308"
     },
     "24e5c1040b872b94bc5ee47eefa5e32068c3051645569b3a50bdcf4913f0e9e1": {
       "description": "Loved it",
-      "weight": 0.9640275800758169,
-      "count": 2,
-      "last_seen": "2025-09-12T10:25:54.996456"
+      "weight": 0.9321380297406989,
+      "count": 4,
+      "last_seen": "2025-09-15T20:46:01.540462"
     },
     "da0e3bac42902bdc5e63f5851980b7b3442568cca8b7a8c4db72d23a99f5193e": {
       "description": "Lovely hike",
+      "weight": 0.9321380297406989,
+      "count": 3,
+      "last_seen": "2025-09-15T20:46:01.515473"
+    },
+    "12d7ccc7ba87b2d538182dae10e0ccbee6f85b350f7c642937b005ce51bd2851": {
+      "description": "Beautiful ruins",
+      "weight": 0.7615941559557649,
+      "count": 1,
+      "last_seen": "2025-09-15T20:46:01.569178"
+    },
+    "7364a889fad475016419576f2a13c800f08606a8c380af96f67e96275d154159": {
+      "description": "Very peaceful",
+      "weight": 0.7615941559557649,
+      "count": 1,
+      "last_seen": "2025-09-15T20:46:01.588964"
+    },
+    "c56d1b2fbd1567985b82c8f54c21d020473fc4e86c787732a9c1fed26c0a1b80": {
+      "description": "Sunset by the sea",
       "weight": 0.9640275800758169,
       "count": 1,
-      "last_seen": "2025-09-12T10:25:54.976750"
+      "last_seen": "2025-09-15T20:46:02.762082"
+    },
+    "307b6d84c6e168d8ed67882cefd9e56db554b0179273822a90c9ffec4f563f31": {
+      "description": "Magical",
+      "weight": 0.9640275800758169,
+      "count": 1,
+      "last_seen": "2025-09-15T20:46:03.792885"
+    },
+    "bda435a98bd4f46d766cf0193d84634a5f33f220ad93894a481e46290679a295": {
+      "description": "Challenging climb",
+      "weight": 0.9640275800758169,
+      "count": 1,
+      "last_seen": "2025-09-15T20:46:03.839870"
+    },
+    "408e5dafedcec23b6ce08c82e5d79ab28d535f9e1ac41f446b212d2f2cc3d2e9": {
+      "description": "Great views",
+      "weight": 0.9640275800758169,
+      "count": 1,
+      "last_seen": "2025-09-15T20:46:03.860538"
+    },
+    "9cac8c0cba526c88a1c8113cc8f911beb750b7274fe24cbba53e7a9c1adf7d8b": {
+      "description": "Tea tasting",
+      "weight": 0.0,
+      "count": 1,
+      "last_seen": "2025-09-15T20:46:03.884795"
+    },
+    "7b69f2091d23f7413bb6cc2e63be038ccb8e6111cb4989fb634421deccde8e06": {
+      "description": "Nice but crowded",
+      "weight": 0.0,
+      "count": 1,
+      "last_seen": "2025-09-15T20:46:04.626141"
+    },
+    "746d14ae79269694b2f6f75646edf73c7a72a268eb1346936fc11269853f3563": {
+      "description": "Local bazaar",
+      "weight": 0.7615941559557649,
+      "count": 1,
+      "last_seen": "2025-09-15T20:46:04.723246"
+    },
+    "89eb1f5c0c4954fb15ff27ce353ab6490ef5540ec155fe4bdbad5120d5a6a1b0": {
+      "description": "Colorful experience",
+      "weight": 0.7615941559557649,
+      "count": 1,
+      "last_seen": "2025-09-15T20:46:04.821912"
+    },
+    "f32bd46442030bab35aca6d2ef8e6936473c8bc5c42e938957ab6490ddc498cb": {
+      "description": "Elephant safari",
+      "weight": 0.9640275800758169,
+      "count": 1,
+      "last_seen": "2025-09-15T20:46:04.875858"
+    },
+    "60033b9c967dc874dd02f02b3fa422c8dcb2f9a24b5ab25202af7ba23ef3f8f0": {
+      "description": "Amazing",
+      "weight": 0.9640275800758169,
+      "count": 1,
+      "last_seen": "2025-09-15T20:46:04.911313"
+    },
+    "a5781b2b634f4b74e869f8eb123f2a7b5d00cd61b1e1b3b78e14cb6e7581df43": {
+      "description": "River cruise",
+      "weight": 0.7615941559557649,
+      "count": 1,
+      "last_seen": "2025-09-15T20:46:04.938514"
+    },
+    "b697c75458070de497a4e430b4e447c4eb200e262544e2ece7b8ce651dd14c7e": {
+      "description": "Very calm",
+      "weight": 0.7615941559557649,
+      "count": 1,
+      "last_seen": "2025-09-15T20:46:04.964073"
+    },
+    "85ba0523e39a55cd7f607fdc1f77fe229dc6a23e8d9eeaa470c2c529db27a257": {
+      "description": "Art museum",
+      "weight": 0.0,
+      "count": 1,
+      "last_seen": "2025-09-15T20:46:04.992077"
+    },
+    "76d9c626e4a8d8388bd159e4d2ac657ef9839da7ad9becefd2d0aa14560449cb": {
+      "description": "Interesting but small",
+      "weight": 0.0,
+      "count": 1,
+      "last_seen": "2025-09-15T20:46:05.024368"
+    },
+    "b96cf099dd9d32a791eab8db137eaeeef0fa20e98afe5e21c176ff6fce8cbaee": {
+      "description": "Outdoor concert",
+      "weight": 0.9640275800758169,
+      "count": 1,
+      "last_seen": "2025-09-15T20:46:05.049569"
+    },
+    "9e06f4c703d4c82b8568ecfc3e68b5e04b4eaea78659603d7ec058da65c53590": {
+      "description": "Fantastic energy",
+      "weight": 0.9640275800758169,
+      "count": 1,
+      "last_seen": "2025-09-15T20:46:05.071397"
+    },
+    "0576d8b0401c5b0ba791614a49686b8627afe0422fe7a148d3df789349c9f103": {
+      "description": "Ancient rock fortress",
+      "weight": 0.9640275800758169,
+      "count": 1,
+      "last_seen": "2025-09-15T20:50:39.131820"
+    },
+    "deb0ef5b43ff94fb891703b646e0fde0ff67163ee21f6dd9ae876d5ee35b82aa": {
+      "description": "Breathtaking views and history",
+      "weight": 0.9640275800758169,
+      "count": 1,
+      "last_seen": "2025-09-15T20:50:39.166712"
+    },
+    "fc8e48b74048c55e1ead18cab298ca1ab6a8b94c67fab7b8e8bf3a9fed12e8bb": {
+      "description": "Train ride through hills",
+      "weight": 0.9640275800758169,
+      "count": 1,
+      "last_seen": "2025-09-15T20:50:39.196675"
+    },
+    "68e113a899efdd01659185abb04a437d5e7364e2e44cda753fb28c8fb1109436": {
+      "description": "Most beautiful ride ever",
+      "weight": 0.9640275800758169,
+      "count": 1,
+      "last_seen": "2025-09-15T20:50:39.260295"
+    },
+    "7aacd73d892c93d1472a6ea247682c34a866bbd2a38a31afb15549a4d9ef2273": {
+      "description": "Tropical beach town",
+      "weight": 0.7615941559557649,
+      "count": 1,
+      "last_seen": "2025-09-15T20:50:39.290461"
+    },
+    "0841651f9ce5e5a8ac1d644bf12223b066a15d339484f1db0d79bba3bea8643b": {
+      "description": "Lovely sunsets",
+      "weight": 0.7615941559557649,
+      "count": 1,
+      "last_seen": "2025-09-15T20:50:39.310394"
+    },
+    "fb3a9d665cc8431b2f0c952309c6519df04e3c38ecf83ed1fd511ee5df6cb12a": {
+      "description": "Temple of the Tooth",
+      "weight": 0.9640275800758169,
+      "count": 1,
+      "last_seen": "2025-09-15T20:50:39.332386"
+    },
+    "09ed7cca41ea28643539f8043c7ff4d3ce169c7715aad3dcce21c45c80c9f9e9": {
+      "description": "Peaceful and sacred",
+      "weight": 0.9640275800758169,
+      "count": 1,
+      "last_seen": "2025-09-15T20:50:39.352019"
+    },
+    "3c84662d2f41230eebf23a33a93191b0a1fc8954f4d0e9746a00038fc2868dec": {
+      "description": "Safari in national park",
+      "weight": 0.9640275800758169,
+      "count": 1,
+      "last_seen": "2025-09-15T20:50:39.414966"
+    },
+    "09220611edcd3a195ec9d21b5f4039e48496f9f6a92b1c327cbb6daa84ca5baf": {
+      "description": "Saw elephants and leopards",
+      "weight": 0.9640275800758169,
+      "count": 1,
+      "last_seen": "2025-09-15T20:50:39.455401"
+    },
+    "565edd518bcfd32dce932f291f030268a30e3a72aae103b847790fb26625d6a5": {
+      "description": "Colonial fort city",
+      "weight": 0.7615941559557649,
+      "count": 1,
+      "last_seen": "2025-09-15T20:50:39.490066"
+    },
+    "1a5bf20445db93695c445097ceca75acd5250d1874d3c938db621cb28ec0d7d8": {
+      "description": "Charming streets",
+      "weight": 0.7615941559557649,
+      "count": 1,
+      "last_seen": "2025-09-15T20:50:39.602248"
+    },
+    "9dd82478653ab95e4e72d12399009488af14f2275c50a64bbc6175fb69120fa1": {
+      "description": "Surf paradise",
+      "weight": 0.9640275800758169,
+      "count": 1,
+      "last_seen": "2025-09-15T20:50:39.639868"
+    },
+    "afa333115d2dc49ad2bd80724ce0f2b06ae0c81d3a621703b834a73eb58d8a9d": {
+      "description": "Perfect waves",
+      "weight": 0.9640275800758169,
+      "count": 1,
+      "last_seen": "2025-09-15T20:50:39.665679"
+    },
+    "71de31deddfb1dd0d4eab5ff534934361003b17587b033283b328fda91691de4": {
+      "description": "Ancient capital ruins",
+      "weight": 0.9640275800758169,
+      "count": 1,
+      "last_seen": "2025-09-15T20:50:39.690134"
+    },
+    "2e6fa40cb32e1eba22601da61adb4df84f30628e3358688304cddbe54a46bd4b": {
+      "description": "Impressive stupas",
+      "weight": 0.9640275800758169,
+      "count": 1,
+      "last_seen": "2025-09-15T20:50:39.719983"
+    },
+    "9d23f639b0cbeeae89c9a562d8cceb122d5e44d99d90ac5a45b099fa90dfda83": {
+      "description": "Tea plantations",
+      "weight": 0.7615941559557649,
+      "count": 1,
+      "last_seen": "2025-09-15T20:50:39.740859"
+    },
+    "82e1a2eb462982fcc572650459eb71c36b92c9db3dc0f2bb910e0b5a763cb277": {
+      "description": "Green hills and fresh air",
+      "weight": 0.7615941559557649,
+      "count": 1,
+      "last_seen": "2025-09-15T20:50:39.765505"
+    },
+    "77786c7b8bf02441e41e2b4d90a31625586e38d6db8f9992668c4092691252ef": {
+      "description": "Hike near Sigiriya",
+      "weight": 0.9640275800758169,
+      "count": 1,
+      "last_seen": "2025-09-15T20:50:39.790269"
+    },
+    "dc0da2bf2bad5065374e16900ef1ed1edf569a61ab37d74f06b0bbacda29fee6": {
+      "description": "Amazing sunrise",
+      "weight": 0.9640275800758169,
+      "count": 1,
+      "last_seen": "2025-09-15T20:50:39.809223"
     }
   },
   "alpha": 0.25,
   "decay_rate": 0.02,
-  "last_update": "2025-09-12T07:46:21.731233"
+  "last_update": "2025-09-15T20:40:54.465934"
 }
