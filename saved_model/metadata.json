@@ -1,7 +1,7 @@
 {
   "tag_affinities": {
-    "hiking": 0.24100689501895423,
-    "quiet": 0.24100689501895423
+    "hiking": 0.4217620662831699,
+    "quiet": 0.4217620662831699
   },
   "semantic_meta": {
     "6222ad23ecde8a82578b9b7d1ba626958391592d4b99756b3244a184dc0c6c29": {
@@ -13,8 +13,14 @@
     "24e5c1040b872b94bc5ee47eefa5e32068c3051645569b3a50bdcf4913f0e9e1": {
       "description": "Loved it",
       "weight": 0.9640275800758169,
+      "count": 2,
+      "last_seen": "2025-09-12T10:25:54.996456"
+    },
+    "da0e3bac42902bdc5e63f5851980b7b3442568cca8b7a8c4db72d23a99f5193e": {
+      "description": "Lovely hike",
+      "weight": 0.9640275800758169,
       "count": 1,
-      "last_seen": "2025-09-12T07:47:28.579741"
+      "last_seen": "2025-09-12T10:25:54.976750"
     }
   },
   "alpha": 0.25,

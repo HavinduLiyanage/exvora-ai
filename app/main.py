@@ -41,12 +41,22 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         return response
 
 
+
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, FileResponse
+
 app = FastAPI(title="Exvora Stateless Itinerary API", version="0.1.0")
 app.add_middleware(RequestIDMiddleware)
+app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(router, prefix="/v1")
 app.include_router(admin_router)
 app.include_router(rerank_router, prefix="/v1")
 app.include_router(ai_rerank_router, prefix="/v1")
+
+# Serve landing page at root
+@app.get("/", response_class=HTMLResponse)
+async def landing_page():
+    return FileResponse("static/index.html")
 
 
 @app.exception_handler(RequestValidationError)

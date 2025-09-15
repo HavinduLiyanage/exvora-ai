@@ -1,0 +1,1 @@
+Static files and landing page are now in /static. main.py will be updated to serve them at / and /static.
