@@ -1,0 +1,1 @@
+{"errorType":"Runtime.InvalidEntrypoint","errorMessage":"RequestId: c2243d0c-2124-4526-8f1a-02d2d28cc43f Error: fork/exec /usr/local/bin/uvicorn: exec format error"}

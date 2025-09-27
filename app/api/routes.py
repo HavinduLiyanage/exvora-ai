@@ -124,31 +124,6 @@ def build_itinerary(req: ItineraryRequest, request: Request, _: None = Depends(_
             req.constraints.model_dump() if req.constraints else {}
         )
     candidates_time = 0
-    # Fallback mechanism: if no candidates, relax filters and retry
-    fallback_note = None
-    if not cands:
-        relaxed_prefs = {**prefs}
-        # Drop avoid_tags first to not over-prune
-        relaxed_prefs["avoid_tags"] = []
-        base_constraints = req.constraints.model_dump() if req.constraints else {}
-        relaxed_constraints = {**base_constraints, "max_transfer_minutes": max(180, int(base_constraints.get("max_transfer_minutes" ) or 0)), "radius_km": max(200, int(base_constraints.get("radius_km") or 0))}
-        relaxed_context = req.trip_context.model_dump()
-        try:
-            cands, drop_log = generate_candidates(relaxed_context, relaxed_prefs, relaxed_constraints)
-            if cands:
-                fallback_note = "Fallback applied: relaxed avoid_tags, widened radius and transfer time to find options."
-        except Exception:
-            cands = []
-        # Last resort: broaden themes too
-        if not cands:
-            very_relaxed_prefs = {**relaxed_prefs, "themes": []}
-            very_relaxed_constraints = {**relaxed_constraints, "radius_km": max(300, int(relaxed_constraints.get("radius_km") or 0)), "max_transfer_minutes": max(300, int(relaxed_constraints.get("max_transfer_minutes") or 0))}
-            try:
-                cands, drop_log = generate_candidates(relaxed_context, very_relaxed_prefs, very_relaxed_constraints)
-                if cands:
-                    fallback_note = "Fallback applied: cleared avoid_tags and themes, increased radius and transfer time."
-            except Exception:
-                cands = []
     
     # Count drop reasons for logging
     drop_reasons = {}
@@ -347,17 +322,6 @@ def build_itinerary(req: ItineraryRequest, request: Request, _: None = Depends(_
             "trip_transfer_minutes": trip_transfer_minutes,
             "daily": [{"date": day["date"], "est_cost": day["summary"].get("est_cost", 0)} for day in days]
         }
-    # Attach fallback note if applied
-    if fallback_note:
-        for day in days:
-            if "notes" not in day:
-                day["notes"] = []
-            if fallback_note not in day["notes"]:
-                day["notes"].append(fallback_note)
-        if notes is None:
-            notes = []
-        if fallback_note not in notes:
-            notes.append(fallback_note)
     
     resp = {
         "currency": final_currency,

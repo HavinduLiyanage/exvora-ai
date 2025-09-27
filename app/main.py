@@ -82,13 +82,13 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 @app.on_event("startup")
 async def startup_tasks():
     # configure model path and backend from env or defaults
-    model_path = os.environ.get("SAVED_MODEL_PATH", "saved_model")
+    model_path = os.environ.get("SAVED_MODEL_PATH", "/tmp/saved_model")  # Use /tmp for Lambda
     ann_backend = os.environ.get("ANN_BACKEND", None)  # 'faiss' or 'hnsw' or None
     rerank_module.init_model(model_path=model_path, ann_backend=ann_backend)
     logger.info("Rerank module initialized during app startup")
 
 @app.on_event("shutdown")
 async def shutdown_tasks():
-    # ensure model saved on shutdown
-    rerank_module.shutdown_model(save_path=os.environ.get("SAVED_MODEL_PATH", "saved_model"))
+    # ensure model saved on shutdown - Lambda handles this automatically
+    rerank_module.shutdown_model(save_path=os.environ.get("SAVED_MODEL_PATH", "/tmp/saved_model"))
     logger.info("Rerank module shutdown complete")
