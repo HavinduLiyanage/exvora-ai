@@ -20,7 +20,6 @@ import hashlib
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
-
 import numpy as np
 
 # sentence_transformers for embeddings and cross-encoder

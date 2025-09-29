@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "exvora-travel-mcp-server"
+version = "1.0.0"
+description = "MCP server for Exvora AI travel data management and insights"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [
+    {name = "Exvora Team"},
+]
+
+dependencies = [
+    "mcp>=1.0.0",
+    "pydantic>=2.5.0",
+    "fastapi>=0.104.0",  # For data validation models
+    "pandas>=2.0.0",     # For data analysis
+    "geopy>=2.3.0",      # For geographical calculations
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+exvora-mcp-server = "exvora_mcp_server.main:main"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+select = ["E", "W", "F", "I", "B", "C4", "UP"]
+ignore = ["E501", "B008", "C901"]
+
+[tool.black]
+target-version = ['py311']
+line-length = 100

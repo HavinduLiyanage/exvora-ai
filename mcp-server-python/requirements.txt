@@ -1,0 +1,20 @@
+# Core MCP dependencies
+mcp>=1.0.0
+
+# Data processing and validation
+pydantic>=2.5.0
+pandas>=2.0.0
+
+# Geospatial calculations
+geopy>=2.3.0
+
+# HTTP client for TripAdvisor API
+aiohttp>=3.8.0
+
+# For schema compatibility with main app
+fastapi>=0.104.0  
+
+# Development dependencies (optional)
+pytest>=7.4.0
+black>=23.0.0
+ruff>=0.1.0

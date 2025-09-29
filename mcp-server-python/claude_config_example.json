@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "exvora-travel": {
+      "command": "/Users/cubo2022/Desktop/Github/exvora-ai/mcp-server-python/venv/bin/python",
+      "args": ["-m", "exvora_mcp_server.main"],
+      "cwd": "/Users/cubo2022/Desktop/Github/exvora-ai/mcp-server-python",
+      "env": {
+        "GOOGLE_PLACES_API_KEY": "your_google_places_api_key_here"
+      }
+    }
+  }
+}
