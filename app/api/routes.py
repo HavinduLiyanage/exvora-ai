@@ -216,6 +216,8 @@ def build_itinerary(req: ItineraryRequest, request: Request, _: None = Depends(_
             from app.engine.transfers import routes_verify
             
             days = []
+            max_items = getattr(settings, 'MAX_ITEMS_PER_DAY', 4)
+            global_used_pois = set()  # Track POIs used across all days to avoid repetition
             for date in dates:
                 # Pack the day with activities and transfer placeholders
                 day_template = {
@@ -223,7 +225,7 @@ def build_itinerary(req: ItineraryRequest, request: Request, _: None = Depends(_
                     "end": day_end,
                     "pace": pace
                 }
-                items = pack_day(ranked, day_template, locks=req.locks)
+                items = pack_day(ranked, day_template, locks=req.locks, max_items=max_items, global_used_pois=global_used_pois)
                 
                 # Verify transfer times with Google Routes (or heuristic fallback)
                 routes_verify(items, mode="DRIVE")

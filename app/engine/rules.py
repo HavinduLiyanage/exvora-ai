@@ -3,7 +3,7 @@ Hardened rules layer for candidate filtering with explainable drop reasons.
 """
 
 from __future__ import annotations
-from typing import List, Dict, Any, Tuple, Iterable
+from typing import List, Dict, Any, Tuple, Iterable, Optional
 import datetime
 from math import radians, sin, cos, asin, sqrt
 
@@ -65,15 +65,19 @@ def in_season(poi: Dict[str, Any], date_range: Dict[str, str]) -> bool:
     seasonality = poi.get("seasonality", [])
     if not seasonality:
         return True  # No seasonality restrictions
-    
+
+    # Special case: "All" means available year-round
+    if "All" in seasonality or "all" in seasonality:
+        return True
+
     # Extract months from date range
     start_date = date_range.get("start", "")
     end_date = date_range.get("end", "")
-    
+
     try:
         start_dt = datetime.datetime.strptime(start_date, "%Y-%m-%d")
         end_dt = datetime.datetime.strptime(end_date, "%Y-%m-%d")
-        
+
         # Check if any month in the range is in seasonality
         current = start_dt
         while current <= end_dt:
@@ -82,7 +86,7 @@ def in_season(poi: Dict[str, Any], date_range: Dict[str, str]) -> bool:
                 return True
             current = current.replace(day=1) + datetime.timedelta(days=32)
             current = current.replace(day=1)
-        
+
         return False
     except ValueError:
         return True  # Invalid date format, be lenient

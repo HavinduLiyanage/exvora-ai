@@ -79,55 +79,80 @@ def _extract_edges(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def _call_google_routes(edges: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Real call: batch or sequential requests to Google Routes/Distance Matrix using place IDs.
-    Return [{'minutes': int, 'km': float}] aligned with edges.
+    Use Google Directions API to get routing information for transfers.
+    Return [{'minutes': int, 'km': float, 'polyline': str, 'steps': list}] aligned with edges.
     Raise on HTTP/timeouts so caller can fallback.
     """
     import googlemaps
-    
-    api_key = os.getenv("GOOGLE_MAPS_API_KEY")
-    if not api_key:
-        raise ValueError("GOOGLE_MAPS_API_KEY not set")
-    
+
+    api_key = "AIzaSyBguUvWS6pEhSADJjAhOAIFf9m4YcIUWmc"
+
     client = googlemaps.Client(key=api_key)
-    
-    # Extract place IDs
-    origins = [edge["from_place_id"] for edge in edges]
-    destinations = [edge["to_place_id"] for edge in edges]
-    
+
+    # Map transfer modes to Google Directions API modes
+    mode_mapping = {
+        "DRIVE": "driving",
+        "WALK": "walking",
+        "BIKE": "bicycling",
+        "TRANSIT": "transit"
+    }
+
+    results = []
+
     try:
-        # Use Distance Matrix API
-        result = client.distance_matrix(
-            origins=origins,
-            destinations=destinations,
-            mode="driving",  # Default to driving
-            units="metric"
-        )
-        
-        results = []
+        # Process each edge individually with Directions API
         for i, edge in enumerate(edges):
-            element = result["rows"][i]["elements"][i]
-            
-            if element["status"] == "OK":
-                duration_seconds = element["duration"]["value"]
-                distance_meters = element["distance"]["value"]
-                
-                duration_minutes = max(3, int(duration_seconds / 60))  # Minimum 3 minutes
-                distance_km = distance_meters / 1000.0
-                
-                results.append({
-                    "minutes": duration_minutes,
-                    "km": distance_km
+            from_place = edge["from_place_id"]
+            to_place = edge["to_place_id"]
+            mode = mode_mapping.get(edge.get("mode", "DRIVE").upper(), "driving")
+
+            # Call Directions API
+            directions = client.directions(
+                origin=f"place_id:{from_place}",
+                destination=f"place_id:{to_place}",
+                mode=mode,
+                units="metric",
+                alternatives=False  # Get single best route
+            )
+
+            if not directions or len(directions) == 0:
+                raise ValueError(f"No directions found for edge {i}")
+
+            # Extract route information
+            route = directions[0]
+            leg = route["legs"][0]
+
+            duration_seconds = leg["duration"]["value"]
+            distance_meters = leg["distance"]["value"]
+
+            duration_minutes = max(3, int(duration_seconds / 60))  # Minimum 3 minutes
+            distance_km = distance_meters / 1000.0
+
+            # Extract polyline for route visualization
+            polyline = route["overview_polyline"]["points"]
+
+            # Extract steps for detailed instructions (optional)
+            steps = []
+            for step in leg.get("steps", []):
+                steps.append({
+                    "instruction": step.get("html_instructions", ""),
+                    "distance": step["distance"]["value"],
+                    "duration": step["duration"]["value"],
+                    "mode": step.get("travel_mode", mode)
                 })
-            else:
-                # Fallback to heuristic if Google fails for this edge
-                raise ValueError(f"Google API failed for edge {i}: {element['status']}")
-        
+
+            results.append({
+                "minutes": duration_minutes,
+                "km": distance_km,
+                "polyline": polyline,
+                "steps": steps
+            })
+
         return results
-        
+
     except Exception as e:
         # Any error should trigger fallback
-        raise RuntimeError(f"Google Routes API error: {str(e)}")
+        raise RuntimeError(f"Google Directions API error: {str(e)}")
 
 
 def routes_verify(items: List[Dict[str, Any]], mode: str = "DRIVE") -> List[Dict[str, Any]]:
@@ -147,7 +172,9 @@ def routes_verify(items: List[Dict[str, Any]], mode: str = "DRIVE") -> List[Dict
             t = items[e["idx"]]
             t["duration_minutes"] = int(r["minutes"])
             t["distance_km"] = float(r["km"])
-            t["source"] = "google_routes_live"
+            t["polyline"] = r.get("polyline", "")
+            t["steps"] = r.get("steps", [])
+            t["source"] = "google_directions_api"
     except Exception:
         # Fill all target edges heuristically
         for e in edges:
@@ -156,5 +183,5 @@ def routes_verify(items: List[Dict[str, Any]], mode: str = "DRIVE") -> List[Dict
             t["duration_minutes"] = 12  # 12 minutes default
             t["distance_km"] = 3.5  # 3.5 km default
             t["source"] = "heuristic"
-    
+
     return [it for it in items if it.get("type") == "transfer"]

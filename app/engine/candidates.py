@@ -12,16 +12,25 @@ PRICE_ORDER = {"free": 0, "low": 1, "medium": 2, "high": 3}
 # Default radius for region windowing (km)
 DEFAULT_RADIUS_KM = 50
 
+# Cache for POIs to avoid repeated loading
+_POI_CACHE: List[Dict[str, Any]] | None = None
+
 
 def load_all_pois() -> List[Dict[str, Any]]:
     """
     Return POIs as list[dict] with fields:
     poi_id, place_id, name/title, tags, themes, price_band, estimated_cost,
     opening_hours, seasonality, duration_minutes, safety_flags, coords {lat,lng}, region, last_verified
-    Load from fixture dataset.
+    Load from fixture dataset with caching.
     """
+    global _POI_CACHE
+
+    # Return cached POIs if available
+    if _POI_CACHE is not None:
+        return _POI_CACHE
+
     pois = load_fixture_pois()
-    
+
     # Normalize field names to match expected schema
     normalized_pois = []
     for poi in pois:
@@ -43,18 +52,23 @@ def load_all_pois() -> List[Dict[str, Any]]:
             "last_verified": poi.get("last_verified", "2025-01-01T00:00:00Z")
         }
         normalized_pois.append(normalized)
-    
+
+    # Cache the normalized POIs
+    _POI_CACHE = normalized_pois
+
     return normalized_pois
 
 
-def resolve_base_coords(base_place_id: str) -> Tuple[float, float]:
+def resolve_base_coords(base_place_id: str, pois: List[Dict[str, Any]] | None = None) -> Tuple[float, float]:
     """Return (lat,lng) for base place_id from dataset."""
-    pois = load_all_pois()
+    if pois is None:
+        pois = load_all_pois()
+
     for poi in pois:
         if poi["place_id"] == base_place_id:
             coords = poi["coords"]
             return coords["lat"], coords["lng"]
-    
+
     # Fallback to Colombo coordinates if not found
     return 6.9271, 79.8612
 
@@ -162,26 +176,57 @@ def annotate_runtime_fields(pois: List[Dict[str, Any]], base: Tuple[float, float
         poi["opening_align"] = alignment
 
 
-def prefilter_by_themes_tags(pois: List[Dict[str, Any]], preferences: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Quick keep if overlap with preferences.themes/activity_tags; keep leniently for MVP."""
+def prefilter_by_themes_tags(pois: List[Dict[str, Any]], preferences: Dict[str, Any], min_required: int = 50) -> List[Dict[str, Any]]:
+    """
+    Quick keep if overlap with preferences.themes/activity_tags.
+    If too few matches (< min_required), return all POIs to ensure variety.
+    This prevents overly restrictive filtering for multi-day trips.
+    """
     themes = set(preferences.get("themes", []))
     activity_tags = set(preferences.get("activity_tags", []))
-    
+
     if not themes and not activity_tags:
         return pois  # No preferences, keep all
-    
+
     filtered = []
     for poi in pois:
         poi_themes = set(poi.get("themes", []))
         poi_tags = set(poi.get("tags", []))
-        
-        # Check for any overlap
+
+        # Check for exact overlap
         theme_overlap = bool(themes & poi_themes)
         tag_overlap = bool(activity_tags & poi_tags)
-        
-        if theme_overlap or tag_overlap:
+
+        # Also check for partial/fuzzy matches (case-insensitive substring)
+        fuzzy_theme_match = False
+        fuzzy_tag_match = False
+
+        if themes and not theme_overlap:
+            for requested_theme in themes:
+                for poi_theme in poi_themes:
+                    if requested_theme.lower() in poi_theme.lower() or poi_theme.lower() in requested_theme.lower():
+                        fuzzy_theme_match = True
+                        break
+                if fuzzy_theme_match:
+                    break
+
+        if activity_tags and not tag_overlap:
+            for requested_tag in activity_tags:
+                for poi_tag in poi_tags:
+                    if requested_tag.lower() in poi_tag.lower() or poi_tag.lower() in requested_tag.lower():
+                        fuzzy_tag_match = True
+                        break
+                if fuzzy_tag_match:
+                    break
+
+        if theme_overlap or tag_overlap or fuzzy_theme_match or fuzzy_tag_match:
             filtered.append(poi)
-    
+
+    # Fallback: if too few matches, return all POIs (let ranking handle preference weighting)
+    # This ensures multi-day trips have enough variety
+    if len(filtered) < min_required:
+        return pois
+
     return filtered
 
 
@@ -198,18 +243,31 @@ def generate_candidates(trip_context: Dict[str, Any], preferences: Dict[str, Any
     """
     from .rules import filter_candidates
     
-    # Step 1: Load POIs
+    # Step 1: Load POIs (once!)
     all_pois = load_all_pois()
-    
+
     # Step 2: Region window
     base_place_id = trip_context.get("base_place_id")
-    base_coords = resolve_base_coords(base_place_id)
+    base_coords = resolve_base_coords(base_place_id, pois=all_pois)
     radius_km = constraints.get("radius_km", DEFAULT_RADIUS_KM)
     regional_pois = window_by_region(all_pois, base_coords, radius_km)
     
     # Step 3: Prefilter by themes/tags
     day_template = trip_context.get("day_template", {})
-    themed_pois = prefilter_by_themes_tags(regional_pois, preferences)
+
+    # Calculate minimum POIs needed based on trip duration
+    date_range = trip_context.get("date_range", {})
+    if date_range.get("start") and date_range.get("end"):
+        from datetime import datetime
+        start = datetime.fromisoformat(date_range["start"])
+        end = datetime.fromisoformat(date_range["end"])
+        num_days = (end - start).days + 1
+        # Need at least 4 activities per day, so require 4 * num_days POIs minimum
+        min_required = num_days * 4
+    else:
+        min_required = 50  # Default fallback
+
+    themed_pois = prefilter_by_themes_tags(regional_pois, preferences, min_required=min_required)
     
     # Step 4: Annotate runtime fields
     annotate_runtime_fields(themed_pois, base_coords, day_template)

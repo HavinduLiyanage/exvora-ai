@@ -224,8 +224,10 @@ def rank(cands: List[Dict[str, Any]], daily_cap: float | None, prefs: Dict[str, 
     scored_cands = []
     for cand in cands:
         score = _score(cand, daily_cap, prefs, day_start, day_end, pace, scheduled_items, affinities, context)
+        # Add score to candidate for scheduling
+        cand["score"] = score
         scored_cands.append((cand, score))
-    
+
     # Sort by score descending
     ranked = [cand for cand, score in sorted(scored_cands, key=lambda x: x[1], reverse=True)]
     

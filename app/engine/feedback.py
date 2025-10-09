@@ -118,7 +118,10 @@ def repack_day_from_actions(
         "end": day_end,
         "pace": pace
     }
-    day_plan = schedule.pack_day(ranked, day_template, locks)
+    from app.config import get_settings
+    settings = get_settings()
+    max_items = getattr(settings, 'MAX_ITEMS_PER_DAY', 4)
+    day_plan = schedule.pack_day(ranked, day_template, locks, max_items=max_items)
     new_activities = [i for i in day_plan if i.get("type") != "transfer"]
 
     # 6) merge new activities with kept items
